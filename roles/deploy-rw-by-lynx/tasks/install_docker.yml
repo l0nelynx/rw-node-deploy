@@ -1,0 +1,22 @@
+- name: Download Docker install script
+  get_url:
+    url: https://get.docker.com
+    dest: /tmp/get-docker.sh
+    mode: '0755'
+
+- name: Run Docker install script
+  command: sh /tmp/get-docker.sh
+  args:
+    creates: /usr/bin/docker    # не запускать повторно если docker уже есть
+
+- name: Start and enable Docker
+  service:
+    name: docker
+    state: started
+    enabled: true
+
+- name: Add user to docker group
+  user:
+    name: "{{ ansible_user }}"
+    groups: docker
+    append: true

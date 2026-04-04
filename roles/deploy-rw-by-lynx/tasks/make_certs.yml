@@ -1,0 +1,15 @@
+# ── 5. SSL certs ──────────────────────────────────────────────
+- name: Ensure certs directory exists
+  file:
+    path: "{{ target_dir }}/certs"
+    state: directory
+    mode: "0755"
+
+- name: Generate self-signed certificate
+  command: >
+    openssl req -x509 -nodes -days 365 -newkey rsa:2048
+    -keyout {{ target_dir }}/certs/private.key
+    -out {{ target_dir }}/certs/fullchain.crt
+    -subj "/C=US/ST=State/L=City/O=Organization/CN={{ reality_domain }}"
+  args:
+    creates: "{{ target_dir }}/certs/fullchain.crt"

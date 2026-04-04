@@ -1,0 +1,35 @@
+---
+# Play 1: Bootstrap — установить сервисный ключ на новые хосты
+- name: Bootstrap SSH service key
+  hosts: webservers
+  gather_facts: false
+  vars:
+    service_key_path: "~/.ssh/id_ed25519"
+    # Если root_pass задан — подключаемся по паролю, иначе по мастер-ключу {{master_key}}
+    ansible_password: "{{ root_pass | default(omit) }}"
+    ansible_ssh_private_key_file: "{{ (root_pass is defined) | ternary(omit, playbook_dir + '/{{master_key}}') }}"
+  tasks:
+    - import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_keys.yml
+
+# Play 2: Основной деплой — всегда по сервисному ключу
+- name: Deploy Remnawave Node
+  hosts: webservers
+  become: true
+  vars:
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+  vars_prompt:
+    - name: cf_token
+      prompt: "Cloudflare API Token"
+      private: true
+
+    - name: cf_zone_id
+      prompt: "Cloudflare Zone ID"
+      private: false
+
+    - name: rw_token
+      prompt: "Enter RW SECRET_TOKEN"
+      private: true
+  roles:
+    - deploy-rw-by-lynx

@@ -1,0 +1,38 @@
+# ── 3. Build nginx config ─────────────────────────────────────
+- name: Get current public IP
+  uri:
+    url: https://api.ipify.org
+    return_content: true
+  register: public_ip_result
+
+- name: Set current IP fact
+  set_fact:
+    current_ip: "{{ public_ip_result.content | trim }}"
+
+- name: Build subdomain list
+  set_fact:
+    subdomains: >-
+      {{
+        subdomains | default([]) + [{
+          'sub_idx':    '%02d' | format(item),
+          'target_idx': '%02d' | format(item + 1),
+          'port':       10001 + item,
+          'sub_full':   sub_mask + ('%02d' | format(item)) + '.' + main_domain,
+          'pp':         pp_map.get('%02d' | format(item + 1), false)
+        }]
+      }}
+  loop: "{{ range(1, sub_count | int + 1) | list }}"
+
+- name: Generate default.conf from template
+  template:
+    src: default.conf.j2
+    dest: "{{ target_dir }}/conf.d/default.conf"
+    mode: "0644"
+  notify: Restart nginx containers
+
+- name: Generate nginx.conf from template
+  template:
+    src: nginx.conf.j2
+    dest: "{{ target_dir }}/nginx.conf"
+    mode: "0644"
+  notify: Restart nginx containers

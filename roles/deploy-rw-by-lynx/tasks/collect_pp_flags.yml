@@ -1,0 +1,8 @@
+# ── 2. Collecting proxy_protocol preferences ──────────────────
+# Ansible не поддерживает интерактивные вопросы в цикле через vars_prompt,
+# поэтому передаём их через extra-vars при запуске:
+# -e '{"pp_map": {"01": true, "02": false, "03": true}}'
+# Если pp_map не передан — по умолчанию false для всех
+- name: Set default pp_map if not provided
+  set_fact:
+    pp_map: "{{ pp_map | default({}) }}"

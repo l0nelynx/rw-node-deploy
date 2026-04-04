@@ -1,0 +1,6 @@
+---
+# vars file for roles/deploy-rw-by-lynx
+# ansible_user: root
+target_dir: /opt/nginx/
+repo_url: "https://github.com/l0nelynx/Nginx_for_xray.git"
+reality_domain: "{{ sub_mask }}.{{ main_domain }}"

@@ -1,0 +1,13 @@
+- name: Generate service SSH key locally (if it doesn't exist)
+  delegate_to: localhost
+  become: false
+  run_once: true
+  command: ssh-keygen -t ed25519 -f {{ service_key_path }} -N "" -C "ansible-service-key"
+  args:
+    creates: "{{ service_key_path }}"
+
+- name: Install service public key on remote host
+  ansible.posix.authorized_key:
+    user: root
+    state: present
+    key: "{{ lookup('file', service_key_path + '.pub') }}"

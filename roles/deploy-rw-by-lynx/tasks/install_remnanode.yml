@@ -1,0 +1,70 @@
+- name: Create /opt/remnanode directory
+  file:
+    path: /opt/remnanode
+    state: directory
+    mode: '0755'
+
+- name: Get pubKey from API
+  uri:
+    url: https://cdn.docs.rw/api/keygen
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rw_token }}"
+    return_content: true
+  register: keygen_response
+
+- name: Set pub_key fact
+  set_fact:
+    pub_key: "{{ keygen_response.json.response.pubKey }}"
+
+#- name: Build activeInbounds list
+#  set_fact:
+#    rw_inbounds: >-
+#      {{
+#        [tag_01, tag_02, tag_03, tag_04, tag_05, tag_06, tag_07, tag_08]
+#        | select('ne', '')
+#        | list
+#      }}
+
+- name: Fallback to empty string if no tags provided
+  set_fact:
+    rw_inbounds: [""]
+  when: rw_inbounds | length == 0
+
+- name: Generate docker-compose.yml
+  template:
+    src: docker-compose.yml.j2
+    dest: /opt/remnanode/docker-compose.yml
+    mode: '0644'
+
+- name: Register node via API
+  uri:
+    url: https://cdn.docs.rw/api/nodes
+    method: POST
+    headers:
+      Content-Type: application/json
+      Authorization: "Bearer {{ rw_token }}"
+    body_format: json
+    body:
+      name: "{{ inventory_hostname }}"
+      address: "{{ ansible_host }}"
+      port: 2222
+      isTrafficTrackingActive: false
+      trafficLimitBytes: 0
+      notifyPercent: 0
+      trafficResetDay: 1
+      countryCode: "XX"
+      consumptionMultiplier: 0
+      configProfile:
+        activeConfigProfileUuid: "{{ rw_config_uuid }}"
+        activeInbounds: "{{ rw_inbounds }}"
+      providerUuid: null
+      tags: [""]
+      activePluginUuid: null
+    status_code: [200, 201]
+  register: node_response
+
+- name: Start Docker Compose
+  community.docker.docker_compose_v2:
+    project_src: /opt/remnanode
+    state: present

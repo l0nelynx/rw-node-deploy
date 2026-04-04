@@ -1,0 +1,43 @@
+# ── 4. Cloudflare DNS ─────────────────────────────────────────
+- name: Create DNS record for reality domain
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: A
+      name: "{{ reality_domain }}"
+      content: "{{ current_ip }}"
+      ttl: 1
+      proxied: false
+    status_code: [200, 201, 409]
+  register: dns_reality
+  failed_when: >
+    dns_reality.json.success is defined
+    and not dns_reality.json.success
+    and 'already exists' not in (dns_reality.json.errors | default([]) | map(attribute='message') | join(''))
+
+- name: Create DNS records for subdomains
+  uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Content-Type: "application/json"
+    body_format: json
+    body:
+      type: A
+      name: "{{ item.sub_full }}"
+      content: "{{ current_ip }}"
+      ttl: 1
+      proxied: false
+    status_code: [200, 201, 409]
+  loop: "{{ subdomains }}"
+  register: dns_sub
+  failed_when: >
+    dns_sub.json.success is defined
+    and not dns_sub.json.success
+    and 'already exists' not in (dns_sub.json.errors | default([]) | map(attribute='message') | join(''))

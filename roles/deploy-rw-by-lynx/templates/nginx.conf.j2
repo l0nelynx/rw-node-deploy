@@ -1,0 +1,88 @@
+user  nginx;
+worker_processes  auto;
+worker_rlimit_nofile 1048576;
+error_log  /var/log/nginx/error.log error;
+pid  /run/nginx.pid;
+
+events {
+    worker_connections  16384;
+    use epoll;
+    multi_accept on;
+}
+
+stream {
+    tcp_nodelay on;
+
+    map $ssl_preread_server_name $backend_dispatcher {
+        {{ reality_domain }}    127.0.0.1:10001;
+{% for sub in subdomains %}
+        {{ sub.sub_full }}    127.0.0.1:{{ sub.port }};
+{% endfor %}
+        default nginx_internal_http;
+    }
+
+    upstream tcp_to_xray_01 {
+        server unix:/dev/shm/tcp_01.socket;
+    }
+{% for sub in subdomains %}
+    upstream tcp_to_xray_{{ sub.target_idx }} {
+        server unix:/dev/shm/tcp_{{ sub.target_idx }}.socket;
+    }
+{% endfor %}
+
+    upstream nginx_internal_http {
+        server 127.0.0.1:8443;
+    }
+
+    # ── Внешний listener ──
+    server {
+        listen 443 fastopen=256 reuseport;
+        ssl_preread on;
+        proxy_protocol on;
+        proxy_connect_timeout 5s;
+        proxy_timeout 1h;
+        proxy_pass $backend_dispatcher;
+    }
+
+    # ── Промежуточный блок для reality (tcp_01) ──
+    server {
+        listen 127.0.0.1:10001 proxy_protocol;
+        set_real_ip_from 127.0.0.1;
+{% if pp_map.get('01', false) %}
+        proxy_protocol on;
+{% endif %}
+        proxy_pass tcp_to_xray_01;
+    }
+
+    # ── Промежуточные блоки для субдоменов ──
+{% for sub in subdomains %}
+    server {
+        listen 127.0.0.1:{{ sub.port }} proxy_protocol;
+        set_real_ip_from 127.0.0.1;
+{% if sub.pp %}
+        proxy_protocol on;
+{% endif %}
+        proxy_pass tcp_to_xray_{{ sub.target_idx }};
+    }
+{% endfor %}
+}
+
+http {
+    include       /etc/nginx/mime.types;
+    default_type  application/octet-stream;
+    log_format  main  '$remote_addr - $remote_user [$time_local] "$request" '
+                      '$status $body_bytes_sent "$http_referer" '
+                      '"$http_user_agent" "$http_x_forwarded_for"';
+    access_log /var/log/nginx/access.log main buffer=64k flush=5s;
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay on;
+    keepalive_timeout 65;
+    types_hash_max_size 2048;
+    server_tokens off;
+    gzip on;
+    gzip_min_length 1024;
+    gzip_comp_level 4;
+    gzip_types text/plain text/css text/xml text/javascript application/json application/javascript;
+    include /etc/nginx/conf.d/*.conf;
+}

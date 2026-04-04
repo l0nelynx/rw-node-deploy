@@ -1,0 +1,22 @@
+# ── 6. Docker Compose ─────────────────────────────────────────
+- name: Stop existing containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ target_dir }}"
+    state: absent
+    remove_orphans: true
+  ignore_errors: true
+
+- name: Start containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ target_dir }}"
+    state: present
+
+- name: Show container logs (last 50 lines)
+  command: docker compose logs --tail=50
+  args:
+    chdir: "{{ target_dir }}"
+  register: compose_logs
+
+- name: Print container logs
+  debug:
+    msg: "{{ compose_logs.stdout_lines }}"

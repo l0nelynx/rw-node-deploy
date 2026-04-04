@@ -1,0 +1,6 @@
+---
+# handlers file for roles/deploy-rw-by-lynx
+- name: Restart nginx containers
+  community.docker.docker_compose_v2:
+    project_src: "{{ target_dir }}"
+    state: restarted

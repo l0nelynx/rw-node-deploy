@@ -1,0 +1,28 @@
+---
+# tasks file for roles/deploy-rw-by-lynx
+- import_tasks: install_docker.yml
+  tags: [docker]
+
+- import_tasks: sync_repo.yml
+  tags: [repo]
+
+- import_tasks: collect_pp_flags.yml
+  tags: [nginx, config]
+
+- import_tasks: set_sysctl.yml
+  tags: [sysctl]
+
+- import_tasks: build_nginx_conf.yml
+  tags: [nginx, config]
+
+- import_tasks: setup_cloudflare.yml
+  tags: [dns]
+
+- import_tasks: make_certs.yml
+  tags: [certs]
+
+- import_tasks: run_nginx.yml
+  tags: [nginx]
+
+- import_tasks: install_remnanode.yml
+  tags: [remnanode]

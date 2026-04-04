@@ -1,0 +1,20 @@
+# ── 1. Repo Sync ──────────────────────────────────────────────
+- name: Ensure target directory exists
+  file:
+    path: "{{ target_dir }}"
+    state: directory
+    mode: "0755"
+
+- name: Clone or update repository
+  git:
+    repo: "{{ repo_url }}"
+    dest: "{{ target_dir }}"
+    version: main
+    force: true
+
+- name: Ensure .env file exists
+  copy:
+    content: ""
+    dest: "{{ target_dir }}/.env"
+    mode: "0644"
+    force: false

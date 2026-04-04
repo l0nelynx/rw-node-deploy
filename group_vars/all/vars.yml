@@ -1,0 +1,4 @@
+# group_vars/all/vars.yml (обычный, в git)
+#cf_token: "{{ vault_cf_token }}"
+#cf_zone_id: "{{ vault_cf_zone_id }}"
+#rw_token: "{{ vault_rw_token }}"

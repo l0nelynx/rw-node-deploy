@@ -1,0 +1,9 @@
+- hosts: webservers
+  become: yes
+  roles:
+#      - themelbine.warp_native
+      - ansible-role-warp-native
+  vars:
+      warp_native_state: present
+      warp_native_modify_resolv: true
+      warp_native_wgcf_version: latest
