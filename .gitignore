@@ -1,2 +1,9 @@
 /hosts
 /lynx
+.venv
+.idea
+install_keys.yml
+install_nginx.yml
+lynx
+hosts
+nginx_quick.sh
