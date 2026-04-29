@@ -6,7 +6,7 @@
 
 - name: Get pubKey from API
   uri:
-    url: https://cdn.docs.rw/api/keygen
+    url: "{{ rw_endpoint }}/api/keygen"
     method: GET
     headers:
       Authorization: "Bearer {{ rw_token }}"
@@ -39,7 +39,7 @@
 
 - name: Register node via API
   uri:
-    url: https://cdn.docs.rw/api/nodes
+    url: "{{ rw_endpoint }}/api/nodes"
     method: POST
     headers:
       Content-Type: application/json
