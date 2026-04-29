@@ -17,18 +17,26 @@
   set_fact:
     pub_key: "{{ keygen_response.json.response.pubKey }}"
 
-#- name: Build activeInbounds list
-#  set_fact:
-#    rw_inbounds: >-
-#      {{
-#        [tag_01, tag_02, tag_03, tag_04, tag_05, tag_06, tag_07, tag_08]
-#        | select('ne', '')
-#        | list
-#      }}
+- name: Fetch inbounds for config profile
+  uri:
+    url: "{{ rw_endpoint }}/api/config-profiles/{{ rw_config_uuid }}/inbounds"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rw_token }}"
+    return_content: true
+  register: inbounds_response
 
-- name: Use empty activeInbounds list
+- name: Build activeInbounds UUID list
   set_fact:
-    rw_inbounds: []
+    rw_active_inbounds: >-
+      {{
+        inbounds_response.json.response.inbounds
+        | selectattr('tag', 'in', rw_inbounds | default([]))
+        | map(attribute='uuid')
+        | list
+        if (rw_inbounds | default([]) | length > 0)
+        else (inbounds_response.json.response.inbounds | map(attribute='uuid') | list)
+      }}
 
 - name: Generate docker-compose.yml
   template:
@@ -56,7 +64,7 @@
       consumptionMultiplier: 0
       configProfile:
         activeConfigProfileUuid: "{{ rw_config_uuid }}"
-        activeInbounds: "{{ rw_inbounds }}"
+        activeInbounds: "{{ rw_active_inbounds }}"
       providerUuid: null
       tags: []
       activePluginUuid: null
