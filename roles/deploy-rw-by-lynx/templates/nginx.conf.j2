@@ -48,7 +48,7 @@ stream {
     server {
         listen 127.0.0.1:10001 proxy_protocol;
         set_real_ip_from 127.0.0.1;
-{% if pp_map.get('01', false) %}
+{% if (pp_map[0] | default(0)) | int | bool %}
         proxy_protocol on;
 {% endif %}
         proxy_pass tcp_to_xray_01;
