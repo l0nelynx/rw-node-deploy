@@ -18,7 +18,7 @@
           'target_idx': '%02d' | format(item + 1),
           'port':       10001 + item,
           'sub_full':   sub_mask + ('%02d' | format(item)) + '.' + main_domain,
-          'pp':         pp_map.get('%02d' | format(item + 1), false)
+          'pp':         (pp_map[item - 1] | default(0)) | int | bool
         }]
       }}
   loop: "{{ range(1, sub_count | int + 1) | list }}"
