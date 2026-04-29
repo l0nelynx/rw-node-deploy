@@ -45,6 +45,11 @@ stream {
         proxy_timeout 1h;
         proxy_pass $backend_dispatcher;
     }
+	server {
+        listen 443 udp reuseport;
+		proxy_buffer_size 32k;
+        proxy_pass tcp_to_xray_03;
+    }
 
     # ── Промежуточный блок для reality (tcp_01) ──
     server {
