@@ -44,6 +44,24 @@
     dest: /opt/remnanode/docker-compose.yml
     mode: '0644'
 
+- name: Fetch existing nodes
+  uri:
+    url: "{{ rw_endpoint }}/api/nodes"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rw_token }}"
+    return_content: true
+  register: nodes_response
+
+- name: Check if node already registered
+  set_fact:
+    node_already_exists: >-
+      {{
+        nodes_response.json.response
+        | selectattr('name', 'equalto', inventory_hostname)
+        | list | length > 0
+      }}
+
 - name: Register node via API
   uri:
     url: "{{ rw_endpoint }}/api/nodes"
@@ -70,6 +88,7 @@
       activePluginUuid: null
     status_code: [200, 201]
   register: node_response
+  when: not node_already_exists
 
 - name: Start Docker Compose
   community.docker.docker_compose_v2:
