@@ -16,7 +16,7 @@ stream {
     proxy_socket_keepalive on;
     proxy_buffer_size 32k;
     map $ssl_preread_server_name $backend_dispatcher {
-        {{ reality_domain }}    127.0.0.1:10001;
+        {{ reality_domain }}    tcp_to_xray_01;
 {% for sub in subdomains %}
         {{ sub.sub_full }}    127.0.0.1:{{ sub.port }};
 {% endfor %}
@@ -43,22 +43,13 @@ stream {
         proxy_protocol on;
         proxy_connect_timeout 2s;
         proxy_timeout 1h;
+        proxy_buffer_size 64k;
         proxy_pass $backend_dispatcher;
     }
 	server {
         listen 443 udp reuseport;
-		proxy_buffer_size 32k;
+		proxy_buffer_size 8k;
         proxy_pass tcp_to_xray_03;
-    }
-
-    # ── Промежуточный блок для reality (tcp_01) ──
-    server {
-        listen 127.0.0.1:10001 proxy_protocol;
-        set_real_ip_from 127.0.0.1;
-{% if (pp_map[0] | default(0)) | int | bool %}
-        proxy_protocol on;
-{% endif %}
-        proxy_pass tcp_to_xray_01;
     }
 
     # ── Промежуточные блоки для субдоменов ──

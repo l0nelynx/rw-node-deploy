@@ -5,11 +5,17 @@
     state: directory
     mode: "0755"
 
+- name: Render openssl req config
+  template:
+    src: req.conf.j2
+    dest: "{{ target_dir }}/certs/req.conf"
+    mode: "0644"
+
 - name: Generate self-signed certificate
   command: >
     openssl req -x509 -nodes -days 365 -newkey rsa:2048
     -keyout {{ target_dir }}/certs/private.key
     -out {{ target_dir }}/certs/fullchain.crt
-    -subj "/C=US/ST=State/L=City/O=Organization/CN={{ reality_domain }}"
+    -config {{ target_dir }}/certs/req.conf
   args:
     creates: "{{ target_dir }}/certs/fullchain.crt"

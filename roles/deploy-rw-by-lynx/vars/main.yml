@@ -3,4 +3,5 @@
 # ansible_user: root
 target_dir: /opt/nginx/
 repo_url: "https://github.com/l0nelynx/Nginx_for_xray.git"
+templates_repo_url: "https://github.com/Mrvibecodic/node-templates"
 reality_domain: "{{ sub_mask }}.{{ main_domain }}"

@@ -1,16 +1,54 @@
-# ── 1. Repo Sync ──────────────────────────────────────────────
-- name: Ensure target directory exists
+# ── 1. Setup Environment ──────────────────────────────────────
+- name: Install dependencies
+  package:
+    name:
+      - git
+      - unzip
+    state: present
+
+- name: Ensure required directories exist
   file:
-    path: "{{ target_dir }}"
+    path: "{{ item }}"
     state: directory
     mode: "0755"
+  loop:
+    - "{{ target_dir }}"
+    - "{{ target_dir }}/conf.d"
+    - "{{ target_dir }}/html"
+    - "{{ target_dir }}/certs"
 
-- name: Clone or update repository
-  git:
-    repo: "{{ repo_url }}"
-    dest: "{{ target_dir }}"
-    version: main
-    force: true
+- name: Create docker-compose.yml for Nginx
+  copy:
+    dest: "{{ target_dir }}/docker-compose.yml"
+    mode: "0644"
+    content: |
+      services:
+        nginx:
+          image: nginx:alpine
+          container_name: nginx
+          restart: unless-stopped
+          ports:
+            - "443:443/tcp"
+            - "443:443/udp"
+          volumes:
+            - ./conf.d:/etc/nginx/conf.d
+            - ./nginx.conf:/etc/nginx/nginx.conf:ro
+            - ./html:/usr/share/nginx/html
+            - ./certs:/etc/nginx/certs:ro
+            - /dev/shm/:/dev/shm/
+          env_file:
+            - .env
+          logging:
+            driver: "json-file"
+            options:
+              max-size: "10m"
+              max-file: "3"
+          ulimits:
+            nofile:
+              soft: 1048576
+              hard: 1048576
+          extra_hosts:
+            - "host.docker.internal:host-gateway"
 
 - name: Ensure .env file exists
   copy:
@@ -18,3 +56,61 @@
     dest: "{{ target_dir }}/.env"
     mode: "0644"
     force: false
+
+# ── 2. Fake Site Generation ───────────────────────────────────
+
+- name: Remove old temp directory if exists
+  file:
+    path: "{{ target_dir }}/html/temp"
+    state: absent
+
+- name: Clone templates repository
+  git:
+    repo: "{{ templates_repo_url }}"
+    dest: "{{ target_dir }}/html/temp"
+    version: main
+    force: true
+
+- name: Determine template folder
+  set_fact:
+    selected_template: "{{ template | default('esports-stream-template') }}"
+
+- name: Check if selected template exists
+  stat:
+    path: "{{ target_dir }}/html/temp/{{ selected_template }}"
+  register: template_stat
+
+- name: Fallback to default template if selected not found
+  set_fact:
+    selected_template: "esports-stream-template"
+  when: not template_stat.stat.exists
+
+- name: Copy uniquify-theme.sh to template folder
+  copy:
+    src: "{{ target_dir }}/html/temp/uniquify-theme.sh"
+    dest: "{{ target_dir }}/html/temp/{{ selected_template }}/uniquify-theme.sh"
+    mode: "0755"
+    remote_src: true
+
+- name: Run uniquify-theme.sh
+  shell: "./uniquify-theme.sh"
+  args:
+    chdir: "{{ target_dir }}/html/temp/{{ selected_template }}"
+
+- name: Find generated zip archive
+  find:
+    paths: "{{ target_dir }}/html/temp/{{ selected_template }}"
+    patterns: "*.zip"
+  register: found_zips
+
+- name: Unarchive the fake site
+  unarchive:
+    src: "{{ found_zips.files[0].path }}"
+    dest: "{{ target_dir }}/html/"
+    remote_src: true
+  when: found_zips.matched > 0
+
+- name: Cleanup temp directory
+  file:
+    path: "{{ target_dir }}/html/temp"
+    state: absent

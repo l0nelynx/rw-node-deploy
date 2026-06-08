@@ -7,3 +7,4 @@ install_nginx.yml
 lynx
 hosts
 nginx_quick.sh
+/.idea/
