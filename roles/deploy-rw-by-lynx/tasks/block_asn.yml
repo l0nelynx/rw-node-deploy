@@ -1,0 +1,53 @@
+# ── Blacklist ASN blocking ──────────────────────────────────
+- name: Install nftables and wget
+  package:
+    name:
+      - nftables
+      - wget
+    state: present
+
+- name: Run ASN blacklist blocking script
+  shell: |
+    set -e
+    # Temporary directory to prevent polluting the working directory
+    WORKDIR=$(mktemp -d)
+    cd "$WORKDIR"
+
+    echo "Downloading nftables sets..."
+    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist.nft
+    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v4.nft
+    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
+
+    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk.nft
+    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v4.nft
+    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v6.nft
+
+    echo "Cleaning existing structures to prevent duplicate errors..."
+    # Safely remove the filter table if it exists to allow a clean reload
+    nft delete table inet filter 2>/dev/null || true
+
+    echo "Loading base structures and global blacklists..."
+    nft -f blacklist.nft
+    nft -f blacklist-v4.nft
+    nft -f blacklist-v6.nft
+
+    echo "Protecting VM from incoming blacklist sources..."
+    nft add table inet filter
+    nft add chain inet filter input { type filter hook input priority 0 \; policy accept \; }
+    nft add rule inet filter input ip saddr @blacklist_v4 counter reject
+    nft add rule inet filter input ip6 saddr @blacklist_v6 counter reject
+
+    echo "Loading VK-specific blacklists..."
+    nft -f blacklist-vk.nft
+    nft -f blacklist-vk-v4.nft
+    nft -f blacklist-vk-v6.nft
+
+    echo "Cleaning up temporary files..."
+    rm -rf "$WORKDIR"
+  args:
+    executable: /bin/bash
+  register: nft_output
+
+- name: Show nftables application result
+  debug:
+    var: nft_output.stdout_lines

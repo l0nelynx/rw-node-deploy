@@ -26,3 +26,6 @@
 
 - import_tasks: install_remnanode.yml
   tags: [remnanode]
+
+- import_tasks: block_asn.yml
+  tags: [security, firewall]

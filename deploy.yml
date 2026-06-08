@@ -7,7 +7,16 @@
     service_key_path: "~/.ssh/id_ed25519"
     # Если root_pass задан — подключаемся по паролю, иначе по мастер-ключу {{master_key}}
     ansible_password: "{{ root_pass | default(omit) }}"
-    ansible_ssh_private_key_file: "{{ (root_pass is defined) | ternary(omit, playbook_dir + '/{{master_key}}') }}"
+    ansible_ssh_private_key_file: >-
+      {{
+        (root_pass is defined) | ternary(
+          omit,
+          (master_key | expanduser) if (master_key.startswith('/') or master_key.startswith('~'))
+          else (playbook_dir + '/' + master_key)
+        )
+      }}
+    # Отключаем проверку ключей для bootstrap-этапа (особенно важно при использовании пароля)
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
   tasks:
     - import_role:
         name: deploy-rw-by-lynx
