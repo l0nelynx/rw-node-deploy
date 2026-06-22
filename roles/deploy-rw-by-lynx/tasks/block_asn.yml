@@ -1,4 +1,4 @@
-# ── Blacklist ASN blocking ──────────────────────────────────
+# ── Firewall: nftables (replaces ufw) ───────────────────────────
 - name: Install nftables and wget
   package:
     name:
@@ -6,10 +6,17 @@
       - wget
     state: present
 
-- name: Run ASN blacklist blocking script
+# ufw conflicts with direct nftables management on Ubuntu 26.04+
+- name: Disable ufw if present
+  service:
+    name: ufw
+    state: stopped
+    enabled: false
+  ignore_errors: true
+
+- name: Apply ASN blacklists and base firewall rules
   shell: |
     set -e
-    # Temporary directory to prevent polluting the working directory
     WORKDIR=$(mktemp -d)
     cd "$WORKDIR"
 
@@ -22,32 +29,61 @@
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v4.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v6.nft
 
-    echo "Cleaning existing structures to prevent duplicate errors..."
-    # Safely remove the filter table if it exists to allow a clean reload
-    nft delete table inet filter 2>/dev/null || true
+    echo "Flushing existing ruleset..."
+    nft flush ruleset
 
-    echo "Loading base structures and global blacklists..."
+    echo "Loading blacklist sets..."
     nft -f blacklist.nft
     nft -f blacklist-v4.nft
     nft -f blacklist-v6.nft
-
-    echo "Protecting VM from incoming blacklist sources..."
-    nft add table inet filter
-    nft add chain inet filter input { type filter hook input priority 0 \; policy accept \; }
-    nft add rule inet filter input ip saddr @blacklist_v4 counter reject
-    nft add rule inet filter input ip6 saddr @blacklist_v6 counter reject
-
-    echo "Loading VK-specific blacklists..."
     nft -f blacklist-vk.nft
     nft -f blacklist-vk-v4.nft
     nft -f blacklist-vk-v6.nft
 
-    echo "Cleaning up temporary files..."
+    echo "Building base firewall..."
+    nft add table inet filter
+    nft add chain inet filter input  '{ type filter hook input  priority 0; policy drop; }'
+    nft add chain inet filter forward '{ type filter hook forward priority 0; policy accept; }'
+    nft add chain inet filter output  '{ type filter hook output  priority 0; policy accept; }'
+
+    # Drop blacklisted ASNs before any accept rules
+    nft add rule inet filter input ip  saddr @blacklist_v4 counter drop
+    nft add rule inet filter input ip6 saddr @blacklist_v6 counter drop
+
+    # Stateful: accept established/related, drop invalid
+    nft add rule inet filter input ct state established,related accept
+    nft add rule inet filter input ct state invalid drop
+
+    # Loopback
+    nft add rule inet filter input iif lo accept
+
+    # SSH (prevent lockout)
+    nft add rule inet filter input tcp dport 22 accept
+
+    # HTTPS — TCP + UDP (QUIC / HTTP3)
+    nft add rule inet filter input tcp dport 443 accept
+    nft add rule inet filter input udp dport 443 accept
+
+    # ICMP
+    nft add rule inet filter input icmp  type echo-request accept
+    nft add rule inet filter input icmpv6 type echo-request accept
+
     rm -rf "$WORKDIR"
   args:
     executable: /bin/bash
   register: nft_output
 
-- name: Show nftables application result
+- name: Save ruleset for persistence across reboots
+  shell: nft list ruleset > /etc/nftables.conf
+  args:
+    executable: /bin/bash
+
+- name: Enable nftables service
+  service:
+    name: nftables
+    state: started
+    enabled: true
+
+- name: Show nftables result
   debug:
     var: nft_output.stdout_lines
