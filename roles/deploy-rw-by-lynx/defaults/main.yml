@@ -1,2 +1,3 @@
 ---
-# defaults file for roles/deploy-rw-by-lynx
+install_warp: false
+# warp_plus: ""   # set per-host in inventory to activate WARP+

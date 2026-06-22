@@ -60,6 +60,13 @@
     # SSH (prevent lockout)
     nft add rule inet filter input tcp dport 22 accept
 
+    # Remnanode API (panel → node communication)
+    nft add rule inet filter input tcp dport 2222 accept
+
+    # WARP/WireGuard: allow responses from Cloudflare endpoint (port 2408)
+    # WireGuard uses a random listening port so we match by source port instead of conntrack
+    nft add rule inet filter input udp sport 2408 accept
+
     # HTTPS — TCP + UDP (QUIC / HTTP3)
     nft add rule inet filter input tcp dport 443 accept
     nft add rule inet filter input udp dport 443 accept
@@ -72,6 +79,13 @@
   args:
     executable: /bin/bash
   register: nft_output
+
+# Docker uses iptables-nft for NAT (port publishing). After nft flush ruleset,
+# its chains are gone — restart Docker so it rebuilds them before containers start.
+- name: Restart Docker to rebuild iptables NAT chains
+  service:
+    name: docker
+    state: restarted
 
 - name: Save ruleset for persistence across reboots
   shell: nft list ruleset > /etc/nftables.conf

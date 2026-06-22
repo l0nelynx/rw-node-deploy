@@ -21,11 +21,14 @@
 - import_tasks: make_certs.yml
   tags: [certs]
 
+- import_tasks: install_warp.yml
+  tags: [warp]
+
+- import_tasks: block_asn.yml
+  tags: [security, firewall]
+
 - import_tasks: run_nginx.yml
   tags: [nginx]
 
 - import_tasks: install_remnanode.yml
   tags: [remnanode]
-
-- import_tasks: block_asn.yml
-  tags: [security, firewall]
