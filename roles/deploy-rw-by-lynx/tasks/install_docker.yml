@@ -1,3 +1,13 @@
+- name: Wait for apt lock to be released
+  shell: |
+    while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
+      sleep 5
+    done
+  args:
+    executable: /bin/bash
+  changed_when: false
+  timeout: 300
+
 - name: Download Docker install script
   get_url:
     url: https://get.docker.com
