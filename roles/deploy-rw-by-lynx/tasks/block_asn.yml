@@ -47,11 +47,11 @@
     nft add chain inet filter output  '{ type filter hook output  priority 0; policy accept; }'
 
     # Drop blacklisted ASNs before any accept rules
-    nft add rule inet filter input ip  saddr @blacklist_v4 counter drop
-    nft add rule inet filter input ip6 saddr @blacklist_v6 counter drop
+    nft add rule inet filter prerouting ip  saddr @blacklist_v4 counter drop
+    nft add rule inet filter prerouting ip6 saddr @blacklist_v6 counter drop
 
     # Stateful: accept established/related, drop invalid
-    nft add rule inet filter input ct state established,related accept
+    nft add rule inet filter prerouting ct state established,related accept
     nft add rule inet filter input ct state invalid drop
 
     # Loopback
@@ -65,11 +65,14 @@
 
     # WARP/WireGuard: allow responses from Cloudflare endpoint (port 2408)
     # WireGuard uses a random listening port so we match by source port instead of conntrack
-    nft add rule inet filter input udp sport 2408 accept
+    nft add rule inet filter prerouting udp sport 2408 accept
 
     # HTTPS — TCP + UDP (QUIC / HTTP3)
-    nft add rule inet filter input tcp dport 443 accept
+    nft add rule inet filter input tcp dport 443 ct state new meter https_limit { ip saddr timeout 1m limit rate over 10/second } drop
+    nft add rule inet filter input tcp dport 443 ct state new accept
     nft add rule inet filter input udp dport 443 accept
+    nft add rule inet filter input udp dport 8443 accept
+    nft add rule inet filter input udp dport 2408 accept
 
     # ICMP
     nft add rule inet filter input icmp  type echo-request accept
