@@ -66,6 +66,7 @@
               ct state established,related accept
               ct state invalid drop
               iif lo accept
+              ip saddr 172.22.0.0/16 accept
               tcp dport 22 accept
               tcp dport 2222 accept
               udp sport 2408 accept
