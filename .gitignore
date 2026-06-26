@@ -8,3 +8,4 @@ lynx
 hosts
 nginx_quick.sh
 /.idea/
+roles/warp_native/
