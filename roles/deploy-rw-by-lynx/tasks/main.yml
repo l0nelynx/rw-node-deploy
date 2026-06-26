@@ -21,9 +21,6 @@
 - import_tasks: make_certs.yml
   tags: [certs]
 
-- import_tasks: install_warp.yml
-  tags: [warp]
-
 - import_tasks: block_asn.yml
   tags: [security, firewall]
 

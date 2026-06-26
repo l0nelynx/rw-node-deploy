@@ -19,9 +19,9 @@ stream {
         {{ reality_domain }}    tcp_to_xray_01;
 {% for sub in subdomains %}
 {% if sub.pp %}
-        {{ sub.sub_full }}    127.0.0.1:{{ sub.port }};
-{% else %}
         {{ sub.sub_full }}    tcp_to_xray_{{ sub.target_idx }};
+{% else %}
+         {{ sub.sub_full }}    127.0.0.1:{{ sub.port }};
 {% endif %}
 {% endfor %}
         default nginx_internal_http;

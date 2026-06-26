@@ -6,7 +6,7 @@
       - wget
     state: present
 
-# ufw conflicts with direct nftables management on Ubuntu 26.04+
+# ufw конфликтует с прямым управлением nftables
 - name: Disable ufw if present
   service:
     name: ufw
@@ -14,7 +14,10 @@
     enabled: false
   ignore_errors: true
 
-- name: Apply ASN blacklists and base firewall rules
+# Шаг 1: Сбрасываем всё и загружаем блэклисты.
+# После flush ruleset и до загрузки наших цепочек — таблица существует (из blacklist.nft),
+# но ни одного hook не зарегистрировано, поэтому SSH не прерывается.
+- name: Flush ruleset and load ASN blacklists
   shell: |
     set -e
     WORKDIR=$(mktemp -d)
@@ -24,15 +27,13 @@
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v4.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
-
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v4.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v6.nft
 
-    echo "Flushing existing ruleset..."
     nft flush ruleset
 
-    echo "Loading blacklist sets..."
+    echo "Loading blacklist sets into inet filter..."
     nft -f blacklist.nft
     nft -f blacklist-v4.nft
     nft -f blacklist-v6.nft
@@ -40,51 +41,62 @@
     nft -f blacklist-vk-v4.nft
     nft -f blacklist-vk-v6.nft
 
-    echo "Building base firewall..."
-    nft add table inet filter
-    nft add chain inet filter input  '{ type filter hook input  priority 0; policy drop; }'
-    nft add chain inet filter forward '{ type filter hook forward priority 0; policy accept; }'
-    nft add chain inet filter output  '{ type filter hook output  priority 0; policy accept; }'
-
-    # Drop blacklisted ASNs before any accept rules
-    nft add rule inet filter prerouting ip  saddr @blacklist_v4 counter drop
-    nft add rule inet filter prerouting ip6 saddr @blacklist_v6 counter drop
-
-    # Stateful: accept established/related, drop invalid
-    nft add rule inet filter prerouting ct state established,related accept
-    nft add rule inet filter input ct state invalid drop
-
-    # Loopback
-    nft add rule inet filter input iif lo accept
-
-    # SSH (prevent lockout)
-    nft add rule inet filter input tcp dport 22 accept
-
-    # Remnanode API (panel → node communication)
-    nft add rule inet filter input tcp dport 2222 accept
-
-    # WARP/WireGuard: allow responses from Cloudflare endpoint (port 2408)
-    # WireGuard uses a random listening port so we match by source port instead of conntrack
-    nft add rule inet filter prerouting udp sport 2408 accept
-
-    # HTTPS — TCP + UDP (QUIC / HTTP3)
-    nft add rule inet filter input tcp dport 443 ct state new meter https_limit { ip saddr timeout 1m limit rate over 10/second } drop
-    nft add rule inet filter input tcp dport 443 ct state new accept
-    nft add rule inet filter input udp dport 443 accept
-    nft add rule inet filter input udp dport 8443 accept
-    nft add rule inet filter input udp dport 2408 accept
-
-    # ICMP
-    nft add rule inet filter input icmp  type echo-request accept
-    nft add rule inet filter input icmpv6 type echo-request accept
-
     rm -rf "$WORKDIR"
   args:
     executable: /bin/bash
-  register: nft_output
+  register: nft_blacklist_output
 
-# Docker uses iptables-nft for NAT (port publishing). After nft flush ruleset,
-# its chains are gone — restart Docker so it rebuilds them before containers start.
+# Шаг 2: Пишем правила в файл через Ansible (без heredoc — YAML-safe).
+# prerouting priority -150: после conntrack (-200), до Docker DNAT (-100).
+# Это означает: blacklisted IP дропается до того как Docker перенаправит пакет в контейнер.
+- name: Write nftables filter rules to file
+  copy:
+    dest: /tmp/nft_filter.nft
+    mode: '0600'
+    content: |
+      table inet filter {
+          chain prerouting {
+              type filter hook prerouting priority -150; policy accept;
+              ip  saddr @blacklist_v4 counter drop
+              ip6 saddr @blacklist_v6 counter drop
+          }
+
+          chain input {
+              type filter hook input priority 0; policy drop;
+              ct state established,related accept
+              ct state invalid drop
+              iif lo accept
+              tcp dport 22 accept
+              tcp dport 2222 accept
+              udp sport 2408 accept
+              tcp dport 443 accept
+              udp dport 443 accept
+              udp dport 8443 accept
+              icmp  type echo-request accept
+              icmpv6 type echo-request accept
+          }
+
+          chain forward {
+              type filter hook forward priority 0; policy accept;
+          }
+
+          chain output {
+              type filter hook output priority 0; policy accept;
+          }
+      }
+
+# Шаг 3: Загружаем атомарно — все цепочки и правила применяются одним вызовом.
+# Нет промежуточного состояния "policy drop без accept-правил" → SSH не рвётся.
+- name: Load nftables filter rules atomically
+  command: nft -f /tmp/nft_filter.nft
+
+- name: Remove temporary rules file
+  file:
+    path: /tmp/nft_filter.nft
+    state: absent
+
+# Docker использует iptables-nft для NAT. После nft flush ruleset его цепочки пропали —
+# перезапускаем Docker чтобы он пересоздал их до старта контейнеров.
 - name: Restart Docker to rebuild iptables NAT chains
   service:
     name: docker
@@ -101,6 +113,6 @@
     state: started
     enabled: true
 
-- name: Show nftables result
+- name: Show blacklist load result
   debug:
-    var: nft_output.stdout_lines
+    var: nft_blacklist_output.stdout_lines

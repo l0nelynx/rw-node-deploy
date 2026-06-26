@@ -91,11 +91,7 @@
             if ping6 -c1 -W3 2606:4700:4700::1111 >/dev/null 2>&1; then
               echo "ipv6_ok: keeping default endpoint"
             else
-              IPV4=$(python3 -c "
-import socket
-r = socket.getaddrinfo('engage.cloudflareclient.com', 2408, socket.AF_INET)
-print(r[0][4][0])
-" 2>/dev/null)
+              IPV4=$(python3 -c "import socket; print(socket.getaddrinfo('engage.cloudflareclient.com',2408,socket.AF_INET)[0][4][0])" 2>/dev/null)
               if [ -n "$IPV4" ]; then
                 sed -i "s|Endpoint = .*:2408|Endpoint = ${IPV4}:2408|" /root/wgcf-profile.conf
                 echo "ipv6_broken: forced IPv4 endpoint ${IPV4}"

@@ -22,7 +22,11 @@ This project utilizes the excellent work from the [node-templates](https://githu
 ## Usage
 
 1. Configure your inventory and variables in `hosts` or `group_vars`.
-2. Run the deployment:
+2. Install external Ansible roles:
+   ```bash
+   ansible-galaxy install -r requirements.yml -p roles/
+   ```
+3. Run the deployment:
    ```bash
    ansible-playbook -i inventory.ini deploy.yml
    ```
