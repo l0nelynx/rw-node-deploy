@@ -1,0 +1,4 @@
+roles:
+  - name: warp_native
+    src: https://github.com/l0nelynx/ansible-role-warp-native
+    version: main
