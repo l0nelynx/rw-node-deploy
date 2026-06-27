@@ -103,8 +103,18 @@
     name: docker
     state: restarted
 
+- name: Reset SSH connection after Docker restart (clears stale ControlMaster socket)
+  meta: reset_connection
+
+- name: Wait for SSH to be available after Docker restart
+  wait_for_connection:
+    delay: 15
+    timeout: 180
+
 - name: Save ruleset for persistence across reboots
-  shell: nft list ruleset > /etc/nftables.conf
+  shell: |
+    printf '#!/usr/sbin/nft -f\n\n' > /etc/nftables.conf
+    nft list table inet filter >> /etc/nftables.conf
   args:
     executable: /bin/bash
 

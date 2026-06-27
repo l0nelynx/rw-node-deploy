@@ -18,6 +18,16 @@
 - import_tasks: setup_cloudflare.yml
   tags: [dns]
 
+- name: Reset SSH connection before cert generation
+  meta: reset_connection
+  tags: [certs]
+
+- name: Wait for SSH after cloudflare/nginx tasks
+  wait_for_connection:
+    delay: 5
+    timeout: 90
+  tags: [certs]
+
 - import_tasks: make_certs.yml
   tags: [certs]
 
