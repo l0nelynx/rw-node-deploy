@@ -50,11 +50,11 @@ stream {
         proxy_buffer_size 64k;
         proxy_pass $backend_dispatcher;
     }
-	server {
-        listen 443 udp reuseport;
-		proxy_buffer_size 8k;
-        proxy_pass tcp_to_xray_03;
-    }
+#	server {
+#        listen 443 udp reuseport;
+#		proxy_buffer_size 8k;
+#        proxy_pass tcp_to_xray_03;
+#    }
 
     # ── Промежуточные блоки для субдоменов ──
 {% for sub in subdomains %}
