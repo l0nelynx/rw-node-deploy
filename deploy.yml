@@ -28,6 +28,7 @@
   become: true
   vars:
     ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=6'
   roles:
     - role: warp_native
       when: install_warp | default(false) | bool
@@ -154,6 +155,7 @@
   become: true
   vars:
     ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=6'
 #  vars_prompt:
 #    - name: cf_token
 #      prompt: "Cloudflare API Token"
