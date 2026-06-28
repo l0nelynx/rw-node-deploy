@@ -24,22 +24,14 @@
     cd "$WORKDIR"
 
     echo "Downloading nftables sets..."
-    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v4.nft
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
-    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk.nft
-    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v4.nft
-    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-vk-v6.nft
 
     nft flush ruleset
 
     echo "Loading blacklist sets into inet filter..."
-    nft -f blacklist.nft
     nft -f blacklist-v4.nft
     nft -f blacklist-v6.nft
-    nft -f blacklist-vk.nft
-    nft -f blacklist-vk-v4.nft
-    nft -f blacklist-vk-v6.nft
 
     rm -rf "$WORKDIR"
   args:
@@ -73,6 +65,7 @@
               tcp dport 443 accept
               udp dport 443 accept
               udp dport 8443 accept
+              udp dport 8444 accept
               icmp  type echo-request accept
               icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, nd-router-solicit } accept
           }
