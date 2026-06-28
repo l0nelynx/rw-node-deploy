@@ -31,6 +31,31 @@ This project utilizes the excellent work from the [node-templates](https://githu
    ansible-playbook -i inventory.ini deploy.yml
    ```
 
+## Running individual tasks
+
+### Firewall (block_asn)
+
+Downloads ASN blacklists, applies nftables rules, restarts Docker:
+
+```bash
+ansible-playbook -i hosts deploy.yml --tags security,firewall
+```
+
+### WARP
+
+Installs or updates WARP on hosts with `install_warp=true` in the inventory:
+
+```bash
+ansible-playbook -i hosts deploy.yml --tags warp
+```
+
+### Preview tasks without executing
+
+```bash
+ansible-playbook -i hosts deploy.yml --tags security,firewall --list-tasks
+ansible-playbook -i hosts deploy.yml --tags warp --list-tasks
+```
+
 ## License
 
 BSD / MIT
