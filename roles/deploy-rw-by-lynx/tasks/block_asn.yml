@@ -65,7 +65,7 @@
               tcp dport 443 accept
               udp dport 443 accept
               udp dport 8443 accept
-              udp dport 8444 accept
+              tcp dport 8443 accept
               icmp  type echo-request accept
               icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, nd-router-solicit } accept
           }
