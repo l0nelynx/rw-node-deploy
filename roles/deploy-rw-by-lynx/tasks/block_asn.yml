@@ -14,8 +14,15 @@
     enabled: false
   ignore_errors: true
 
-# Шаг 1: Сбрасываем всё и загружаем блэклисты.
-# После flush ruleset и до загрузки наших цепочек — таблица существует (из blacklist.nft),
+# Собственный whitelist — IP из этого списка всегда accept, независимо от ASN blacklist.
+- name: Copy whitelist.nft
+  copy:
+    src: whitelist.nft
+    dest: /tmp/whitelist.nft
+    mode: '0600'
+
+# Шаг 1: Сбрасываем всё, грузим whitelist, затем блэклисты.
+# После flush ruleset и до загрузки наших цепочек — таблица существует (из whitelist.nft/blacklist.nft),
 # но ни одного hook не зарегистрировано, поэтому SSH не прерывается.
 - name: Flush ruleset and load ASN blacklists
   shell: |
@@ -28,6 +35,9 @@
     wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
 
     nft flush ruleset
+
+    echo "Loading whitelist set into inet filter..."
+    nft -f /tmp/whitelist.nft
 
     echo "Loading blacklist sets into inet filter..."
     nft -f blacklist-v4.nft
@@ -49,6 +59,7 @@
       table inet filter {
           chain prerouting {
               type filter hook prerouting priority -150; policy accept;
+              ip saddr @whitelist_v4 accept
               ip  saddr @blacklist_v4 counter drop
               ip6 saddr @blacklist_v6 counter drop
           }
@@ -84,10 +95,13 @@
 - name: Load nftables filter rules atomically
   command: nft -f /tmp/nft_filter.nft
 
-- name: Remove temporary rules file
+- name: Remove temporary rule files
   file:
-    path: /tmp/nft_filter.nft
+    path: "{{ item }}"
     state: absent
+  loop:
+    - /tmp/nft_filter.nft
+    - /tmp/whitelist.nft
 
 # Docker использует iptables-nft для NAT. После nft flush ruleset его цепочки пропали —
 # перезапускаем Docker чтобы он пересоздал их до старта контейнеров.
