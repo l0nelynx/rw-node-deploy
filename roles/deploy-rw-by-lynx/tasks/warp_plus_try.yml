@@ -1,0 +1,24 @@
+# Пробуем один ключ-кандидат. Вызывается в цикле из warp_plus.yml,
+# guard `when: not warp_plus_done` на include пропускает остальные ключи
+# после первого успешного.
+- name: "Apply WARP+ license key {{ warp_key[:8] }}…"
+  command: wgcf update --license-key {{ warp_key }}
+  args:
+    chdir: /root
+  register: warp_upd
+  failed_when: false
+  changed_when: warp_upd.rc == 0
+
+- name: Record key attempt result
+  set_fact:
+    warp_plus_done: "{{ warp_upd.rc == 0 or warp_plus_done }}"
+    warp_applied_key: "{{ warp_key if warp_upd.rc == 0 else warp_applied_key }}"
+    warp_invalid_keys: "{{ warp_invalid_keys + ([warp_key] if warp_upd.rc != 0 else []) }}"
+
+- name: Warn when a key was rejected
+  debug:
+    msg: >-
+      WARP+ key {{ warp_key[:8] }}… rejected on {{ inventory_hostname }}
+      ({{ warp_upd.stderr | default('') | regex_search('[0-9]+ [A-Za-z ]+') | default('no detail') }}).
+      Marked still_valid=false; trying next candidate.
+  when: warp_upd.rc != 0

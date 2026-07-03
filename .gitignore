@@ -7,5 +7,6 @@ install_nginx.yml
 lynx
 hosts
 nginx_quick.sh
+whitelist.nft
 /.idea/
 roles/warp_native/

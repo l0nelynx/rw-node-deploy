@@ -56,6 +56,55 @@ ansible-playbook -i hosts deploy.yml --tags security,firewall --list-tasks
 ansible-playbook -i hosts deploy.yml --tags warp --list-tasks
 ```
 
+## Local configuration files (gitignored)
+
+These files live in the project root, are **not** committed, and are optional.
+
+### `whitelist.nft` — firewall allow-list
+
+If present, its `whitelist_v4` set is loaded before the ASN blacklists and accepted
+first in the `prerouting` chain (whitelisted IPs bypass all blacklist drops). If the
+file is absent, the firewall play runs normally with no whitelist. Format:
+
+```
+table inet filter {
+    set whitelist_v4 {
+        type ipv4_addr
+        flags interval
+        elements = { 77.37.128.0/17, 1.2.3.0/24 }
+    }
+}
+```
+
+### `warp_plus.json` — shared WARP+ key pool
+
+A fallback pool of WARP+ license keys. For any host that isn't already WARP+
+`unlimited` and has no working per-host `warp_plus` var, keys are tried in order
+until Cloudflare accepts one. Only `key` is required — `used_on` and `still_valid`
+are back-filled on each run (a rejected key is flagged `still_valid: false` and
+skipped thereafter; `used_on` records the hosts a key succeeded on).
+
+```json
+{
+  "keys": [
+    { "key": "XXXX-YYYY-ZZZZ", "used_on": [], "still_valid": true }
+  ]
+}
+```
+
+Per-host `warp_plus` (set in the inventory) is always tried first; the pool is the fallback.
+
+## WARP watchdog
+
+When `install_warp=true`, a systemd timer (`warp-watchdog.timer`) restarts the `warp`
+interface whenever its WireGuard handshake goes stale. The check interval is controlled
+by the `warp_watchdog` inventory variable (minutes, default `10`):
+
+```ini
+[all:vars]
+warp_watchdog=5
+```
+
 ## License
 
 BSD / MIT

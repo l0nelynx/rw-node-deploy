@@ -1,0 +1,144 @@
+# ── WARP+ key pool ────────────────────────────────────────────
+# Порядок выбора ключа для хоста:
+#   1. per-host переменная warp_plus (если задана в inventory)
+#   2. общий пул из {{ playbook_dir }}/warp_plus.json (gitignored)
+# Ключ помечается still_valid=false, как только Cloudflare его отклоняет.
+# Пул читается всеми хостами (одинаковое содержимое), а записывается ОДИН раз
+# в конце через run_once — это исключает гонку без serial.
+
+- name: Check for project-root warp_plus.json pool
+  stat:
+    path: "{{ playbook_dir }}/warp_plus.json"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: warp_pool_stat
+
+- name: Load warp_plus.json pool
+  include_vars:
+    file: "{{ playbook_dir }}/warp_plus.json"
+    name: warp_pool_raw
+  when: warp_pool_stat.stat.exists
+
+# Нормализуем: заполняем отсутствующие поля (used_on, still_valid).
+# Обращаемся к warp_pool_raw['keys'] через скобки — .keys конфликтует с методом dict.
+- name: Normalize warp pool keys
+  set_fact:
+    warp_pool_keys: "{{ (warp_pool_keys | default([])) + [ {'used_on': [], 'still_valid': true} | combine(_k) ] }}"
+  loop: "{{ warp_pool_raw['keys'] | default([]) }}"
+  loop_control:
+    loop_var: _k
+  when: warp_pool_stat.stat.exists
+
+# Требование: сначала проверяем валидность текущего ключа на сервере.
+- name: Check current WARP account type
+  shell: |
+    wgcf status 2>/dev/null | grep -i 'Account type' | awk -F': ' '{print $2}' | xargs | tr '[:upper:]' '[:lower:]'
+  args:
+    chdir: /root
+    executable: /bin/bash
+  register: warp_account_type
+  changed_when: false
+  failed_when: false
+
+- name: Initialize WARP+ facts
+  set_fact:
+    warp_current_unlimited: "{{ 'unlimited' in (warp_account_type.stdout | default('')) }}"
+    warp_plus_done: "{{ 'unlimited' in (warp_account_type.stdout | default('')) }}"
+    warp_applied_key: ""
+    warp_invalid_keys: []
+
+- name: Build WARP+ candidate key list
+  set_fact:
+    warp_candidates: >-
+      {{ ( ([warp_plus] if (warp_plus is defined and (warp_plus | string | length) > 0) else [])
+           + (warp_pool_keys | default([])
+              | selectattr('still_valid')
+              | rejectattr('used_on', 'contains', inventory_hostname)
+              | map(attribute='key') | list) ) | unique }}
+
+- name: Report already-unlimited hosts (no key change needed)
+  debug:
+    msg: "{{ inventory_hostname }} already WARP+ unlimited — skipping key application"
+  when: warp_current_unlimited
+
+- name: Stop wg-quick@warp before applying a key
+  systemd:
+    name: wg-quick@warp
+    state: stopped
+  when: not warp_plus_done and (warp_candidates | length > 0)
+
+- name: Try WARP+ keys until one is accepted
+  include_tasks: warp_plus_try.yml
+  loop: "{{ warp_candidates }}"
+  loop_control:
+    loop_var: warp_key
+  when: not warp_plus_done
+
+# Регенерация конфига только если ключ реально сменился.
+- name: Reconfigure WARP after key change
+  when: warp_applied_key | length > 0
+  block:
+    - name: Regenerate wgcf config with WARP+ profile
+      command: wgcf generate
+      args:
+        chdir: /root
+
+    - name: Remove DNS from regenerated config
+      lineinfile:
+        path: /root/wgcf-profile.conf
+        regexp: '^DNS\s*='
+        state: absent
+
+    - name: Ensure Table = off is present
+      lineinfile:
+        path: /root/wgcf-profile.conf
+        insertafter: '^MTU\s*='
+        line: 'Table = off'
+        state: present
+
+    - name: Remove IPv6 address from interface
+      shell: |
+        sed -i 's/,\s*[0-9a-fA-F:]\+\/128//' /root/wgcf-profile.conf
+        sed -i '/^Address = [0-9a-fA-F:]\+\/128/d' /root/wgcf-profile.conf
+      args:
+        executable: /bin/bash
+
+    - name: Fix endpoint to IPv4 if IPv6 unavailable
+      shell: |
+        if ping6 -c1 -W3 2606:4700:4700::1111 >/dev/null 2>&1; then
+          echo "ipv6_ok"
+        else
+          IPV4=$(python3 -c "import socket; print(socket.getaddrinfo('engage.cloudflareclient.com',2408,socket.AF_INET)[0][4][0])" 2>/dev/null)
+          [ -n "$IPV4" ] && sed -i "s|Endpoint = .*:2408|Endpoint = ${IPV4}:2408|" /root/wgcf-profile.conf
+          echo "forced_ipv4: ${IPV4}"
+        fi
+      args:
+        executable: /bin/bash
+
+    - name: Copy updated config to /etc/wireguard/warp.conf
+      copy:
+        src: /root/wgcf-profile.conf
+        dest: /etc/wireguard/warp.conf
+        remote_src: true
+        mode: '0600'
+
+- name: Ensure wg-quick@warp is running
+  systemd:
+    name: wg-quick@warp
+    state: started
+
+# ── Персистентность пула ──────────────────────────────────────
+# Пишем ОДИН раз (run_once), объединяя результаты всех хостов из hostvars через
+# шаблон. run_once срабатывает на первом хосте, реально выполнившем include
+# (проверено эмпирически — не на пропустившем по when), поэтому warp_pool_keys
+# там определён. Работает и с --limit, в отличие от отдельного play на localhost.
+- name: Persist updated warp_plus.json pool
+  template:
+    src: warp_plus.json.j2
+    dest: "{{ playbook_dir }}/warp_plus.json"
+    mode: '0644'
+  delegate_to: localhost
+  become: false
+  run_once: true
+  when: warp_pool_stat.stat.exists

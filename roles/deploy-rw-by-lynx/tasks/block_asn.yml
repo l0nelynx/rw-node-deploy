@@ -15,11 +15,25 @@
   ignore_errors: true
 
 # Собственный whitelist — IP из этого списка всегда accept, независимо от ASN blacklist.
+# Файл лежит в корне проекта (gitignored). Применяется только если существует.
+- name: Check for project-root whitelist.nft
+  stat:
+    path: "{{ playbook_dir }}/whitelist.nft"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: whitelist_stat
+
+- name: Set whitelist_present fact
+  set_fact:
+    whitelist_present: "{{ whitelist_stat.stat.exists }}"
+
 - name: Copy whitelist.nft
   copy:
-    src: whitelist.nft
+    src: "{{ playbook_dir }}/whitelist.nft"
     dest: /tmp/whitelist.nft
     mode: '0600'
+  when: whitelist_present
 
 # Шаг 1: Сбрасываем всё, грузим whitelist, затем блэклисты.
 # После flush ruleset и до загрузки наших цепочек — таблица существует (из whitelist.nft/blacklist.nft),
@@ -36,8 +50,10 @@
 
     nft flush ruleset
 
-    echo "Loading whitelist set into inet filter..."
-    nft -f /tmp/whitelist.nft
+    if [ -f /tmp/whitelist.nft ]; then
+      echo "Loading whitelist set into inet filter..."
+      nft -f /tmp/whitelist.nft
+    fi
 
     echo "Loading blacklist sets into inet filter..."
     nft -f blacklist-v4.nft
@@ -59,7 +75,9 @@
       table inet filter {
           chain prerouting {
               type filter hook prerouting priority -150; policy accept;
+      {% if whitelist_present %}
               ip saddr @whitelist_v4 accept
+      {% endif %}
               ip  saddr @blacklist_v4 counter drop
               ip6 saddr @blacklist_v6 counter drop
           }

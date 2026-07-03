@@ -1,0 +1,102 @@
+# ── WARP watchdog ─────────────────────────────────────────────
+# Раз в {{ warp_watchdog }} мин проверяет свежесть WireGuard-handshake на
+# интерфейсе warp и перезапускает wg-quick@warp, если туннель «завис».
+# Доставляется systemd-таймером (произвольный интервал в минутах, в отличие от cron */N).
+
+- name: Create watchdog directory
+  file:
+    path: /opt/warp-native/logs
+    state: directory
+    mode: '0755'
+
+- name: Deploy watchdog config
+  copy:
+    dest: /opt/warp-native/config.env
+    mode: '0644'
+    force: false
+    content: |
+      HANDSHAKE_THRESHOLD=180
+      RESTART_COOLDOWN=120
+      LOG_MAX_LINES=1000
+
+- name: Deploy watchdog script
+  copy:
+    dest: /opt/warp-native/warp-watchdog.sh
+    mode: '0755'
+    content: |
+      #!/bin/bash
+      CONFIG="/opt/warp-native/config.env"
+      LOG="/opt/warp-native/logs/watchdog.log"
+      COOLDOWN_FILE="/opt/warp-native/logs/.last_restart"
+      [[ -f "$CONFIG" ]] && source "$CONFIG"
+      HANDSHAKE_THRESHOLD="${HANDSHAKE_THRESHOLD:-180}"
+      RESTART_COOLDOWN="${RESTART_COOLDOWN:-120}"
+      LOG_MAX_LINES="${LOG_MAX_LINES:-1000}"
+      log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$1] $2" >> "$LOG"; }
+      hs=$(wg show warp latest-handshakes 2>/dev/null | awk '{print $2}')
+      if [[ -z "$hs" || "$hs" -eq 0 ]]; then
+        log "WARN" "No handshake, restarting warp"
+        systemctl restart wg-quick@warp
+        exit 0
+      fi
+      age=$(( $(date +%s) - hs ))
+      if [[ $age -gt $HANDSHAKE_THRESHOLD ]]; then
+        if [[ -f "$COOLDOWN_FILE" ]]; then
+          last=$(cat "$COOLDOWN_FILE"); now=$(date +%s)
+          (( now - last < RESTART_COOLDOWN )) && { log "INFO" "Cooldown active, skip"; exit 0; }
+        fi
+        date +%s > "$COOLDOWN_FILE"
+        systemctl restart wg-quick@warp
+        log "WARN" "Restarted — handshake was ${age}s stale"
+      else
+        log "OK" "Handshake ${age}s ago"
+      fi
+      lines=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+      (( lines > LOG_MAX_LINES )) && tail -n "$LOG_MAX_LINES" "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
+
+- name: Deploy watchdog systemd service
+  copy:
+    dest: /etc/systemd/system/warp-watchdog.service
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=WARP interface watchdog (handshake staleness check)
+      After=network-online.target
+
+      [Service]
+      Type=oneshot
+      ExecStart=/opt/warp-native/warp-watchdog.sh
+  register: warp_watchdog_service
+
+- name: Deploy watchdog systemd timer
+  copy:
+    dest: /etc/systemd/system/warp-watchdog.timer
+    mode: '0644'
+    content: |
+      [Unit]
+      Description=Run WARP watchdog every {{ warp_watchdog }} min
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec={{ warp_watchdog }}min
+      Persistent=true
+
+      [Install]
+      WantedBy=timers.target
+  register: warp_watchdog_timer
+
+- name: Remove legacy cron watchdog if present
+  file:
+    path: /etc/cron.d/warp-native
+    state: absent
+
+- name: Reload systemd if units changed
+  systemd:
+    daemon_reload: true
+  when: warp_watchdog_service.changed or warp_watchdog_timer.changed
+
+- name: Enable and start watchdog timer
+  systemd:
+    name: warp-watchdog.timer
+    state: started
+    enabled: true

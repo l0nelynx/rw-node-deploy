@@ -58,97 +58,20 @@
       debug:
         msg: "{{ warp_endpoint_fix.stdout }}"
 
-    # WARP+ — применяется только если ключ задан И аккаунт ещё не WARP+
-    - name: Check current WARP account type
-      shell: |
-        wgcf status 2>/dev/null | grep -i 'Account type' | awk -F': ' '{print $2}' | xargs | tr '[:upper:]' '[:lower:]'
-      register: warp_account_type
-      changed_when: false
-      failed_when: false
-      when: (install_warp | default(false) | bool) and (warp_plus | default('') | length > 0)
+    # WARP+ — пробуем per-host ключ (warp_plus), затем общий пул warp_plus.json.
+    # Вся логика вынесена в роль, чтобы переиспользовать переменные и шаблоны.
+    - name: Apply WARP+ from key pool
+      include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_plus
+      when: install_warp | default(false) | bool
 
-    - name: Apply WARP+ license
-      when: >
-        (install_warp | default(false) | bool) and
-        (warp_plus | default('') | length > 0) and
-        (warp_account_type.stdout | default('') != 'unlimited')
-      block:
-        - name: Stop wg-quick@warp
-          service:
-            name: wg-quick@warp
-            state: stopped
-
-        - name: Update account with WARP+ license key
-          shell: wgcf update --license-key "{{ warp_plus }}"
-          args:
-            chdir: /root
-            executable: /bin/bash
-          register: warp_plus_result
-          failed_when: false
-
-        - name: Warn if WARP+ license was rejected by Cloudflare
-          debug:
-            msg: >-
-              WARP+ license key was rejected ({{ warp_plus_result.stderr | regex_search('[0-9]+ [A-Za-z ]+') }}).
-              Possible reasons: key invalid/expired, device limit reached (max 5).
-              Continuing with free WARP.
-          when: warp_plus_result.rc != 0
-
-        - name: Regenerate wgcf config with WARP+ profile
-          shell: wgcf generate
-          args:
-            chdir: /root
-            executable: /bin/bash
-          when: warp_plus_result.rc == 0
-
-        - name: Remove DNS from regenerated config
-          lineinfile:
-            path: /root/wgcf-profile.conf
-            regexp: '^DNS\s*='
-            state: absent
-          when: warp_plus_result.rc == 0
-
-        - name: Ensure Table = off is present
-          lineinfile:
-            path: /root/wgcf-profile.conf
-            insertafter: '^MTU\s*='
-            line: 'Table = off'
-            state: present
-          when: warp_plus_result.rc == 0
-
-        - name: Remove IPv6 address from interface
-          shell: |
-            sed -i 's/,\s*[0-9a-fA-F:]\+\/128//' /root/wgcf-profile.conf
-            sed -i '/^Address = [0-9a-fA-F:]\+\/128/d' /root/wgcf-profile.conf
-          args:
-            executable: /bin/bash
-          when: warp_plus_result.rc == 0
-
-        - name: Fix endpoint to IPv4 if IPv6 unavailable
-          shell: |
-            if ping6 -c1 -W3 2606:4700:4700::1111 >/dev/null 2>&1; then
-              echo "ipv6_ok"
-            else
-              IPV4=$(python3 -c "import socket; print(socket.getaddrinfo('engage.cloudflareclient.com',2408,socket.AF_INET)[0][4][0])" 2>/dev/null)
-              [ -n "$IPV4" ] && sed -i "s|Endpoint = .*:2408|Endpoint = ${IPV4}:2408|" /root/wgcf-profile.conf
-              echo "forced_ipv4: ${IPV4}"
-            fi
-          args:
-            executable: /bin/bash
-          when: warp_plus_result.rc == 0
-
-        - name: Copy updated config to /etc/wireguard/warp.conf
-          copy:
-            src: /root/wgcf-profile.conf
-            dest: /etc/wireguard/warp.conf
-            remote_src: true
-            mode: '0600'
-          when: warp_plus_result.rc == 0
-
-        - name: Start wg-quick@warp with WARP+ config
-          service:
-            name: wg-quick@warp
-            state: started
+    # Watchdog: перезапускает интерфейс warp при устаревшем handshake.
+    - name: Setup WARP watchdog
+      include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_watchdog
+      when: install_warp | default(false) | bool
 
 # Play 3: Основной деплой — всегда по сервисному ключу
 - name: Deploy Remnawave Node

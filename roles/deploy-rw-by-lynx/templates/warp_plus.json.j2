@@ -1,0 +1,24 @@
+{# Rendered once (run_once) on the controller. Merges every host's result:      #}
+{#  - still_valid -> false if any host had the key rejected                       #}
+{#  - used_on     -> existing hosts + hosts that just applied the key (unique)    #}
+{% set warp_invalid_all = [] %}
+{% for h in groups['webservers'] %}
+{% set _ = warp_invalid_all.extend(hostvars[h].warp_invalid_keys | default([])) %}
+{% endfor %}
+{
+  "keys": [
+{% for k in warp_pool_keys %}
+{% set applied_hosts = [] %}
+{% for h in groups['webservers'] %}
+{% if (hostvars[h].warp_applied_key | default('')) == k.key %}
+{% set _ = applied_hosts.append(h) %}
+{% endif %}
+{% endfor %}
+    {
+      "key": {{ k.key | to_json }},
+      "used_on": {{ ((k.used_on | default([])) + applied_hosts) | unique | to_json }},
+      "still_valid": {{ (false if k.key in warp_invalid_all else k.still_valid) | to_json }}
+    }{{ "," if not loop.last else "" }}
+{% endfor %}
+  ]
+}
