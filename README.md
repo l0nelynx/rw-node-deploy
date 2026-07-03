@@ -41,6 +41,18 @@ Downloads ASN blacklists, applies nftables rules, restarts Docker:
 ansible-playbook -i hosts deploy.yml --tags security,firewall
 ```
 
+**Panel control port.** The node's control port (SSH/API, previously hardcoded to `2222`)
+is opened **only** for trusted source IPs via two inventory variables:
+
+```ini
+[all:vars]
+panel_control_port=2222              # optional, defaults to 2222
+panel_control_ip=1.2.3.4             # trusted IP, or a list: [1.2.3.4, 5.6.7.8]
+```
+
+If `panel_control_ip` is not set, the port stays closed (secure default). Port `22`
+remains open for regular SSH.
+
 ### WARP
 
 Installs or updates WARP on hosts with `install_warp=true` in the inventory:

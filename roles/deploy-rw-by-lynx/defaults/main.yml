@@ -5,3 +5,10 @@ install_warp: false
 # WARP watchdog: как часто (в минутах) проверять свежесть handshake интерфейса warp.
 # Переопределяется в inventory (per-host или в [all:vars]).
 warp_watchdog: 10
+
+# Панель управления (SSH/API ноды): порт открывается ТОЛЬКО для panel_control_ip.
+# panel_control_port — порт (по умолчанию 2222, как было захардкожено ранее).
+# panel_control_ip — доверенный IP или список IP; ЗАДАЁТСЯ в inventory.
+#   Если panel_control_ip не задан — порт не открывается (закрыт по умолчанию).
+panel_control_port: 2222
+# panel_control_ip: 1.2.3.4          # или список: [1.2.3.4, 5.6.7.8]

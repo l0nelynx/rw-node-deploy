@@ -64,6 +64,14 @@
     executable: /bin/bash
   register: nft_blacklist_output
 
+# Панель управления: порт открывается только для доверенных IP (panel_control_ip).
+# panel_control_ip может быть одной строкой или списком; нормализуем в список.
+# Если panel_control_ip не задан — правило не добавляется вовсе (порт закрыт).
+- name: Normalize panel control source IPs
+  set_fact:
+    panel_control_ips: "{{ panel_control_ip if (panel_control_ip is sequence and panel_control_ip is not string) else [panel_control_ip] }}"
+  when: panel_control_ip is defined and panel_control_ip | length > 0
+
 # Шаг 2: Пишем правила в файл через Ansible (без heredoc — YAML-safe).
 # prerouting priority -150: после conntrack (-200), до Docker DNAT (-100).
 # Это означает: blacklisted IP дропается до того как Docker перенаправит пакет в контейнер.
@@ -89,7 +97,9 @@
               iif lo accept
               ip saddr 172.22.0.0/16 accept
               tcp dport 22 accept
-              tcp dport 2222 accept
+      {% if panel_control_ips is defined %}
+              ip saddr { {{ panel_control_ips | join(', ') }} } tcp dport {{ panel_control_port }} accept
+      {% endif %}
               udp sport 2408 accept
               tcp dport 443 accept
               udp dport 443 accept
