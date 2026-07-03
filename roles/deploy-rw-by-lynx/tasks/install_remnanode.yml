@@ -81,7 +81,7 @@
         body:
           name: "{{ inventory_hostname }}"
           address: "{{ ansible_host }}"
-          port: 2222
+          port: "{{ panel_control_port | int }}"
           isTrafficTrackingActive: false
           trafficLimitBytes: 0
           notifyPercent: 0

@@ -146,10 +146,18 @@
     delay: 15
     timeout: 180
 
+# Сохраняем ИДЕМПОТЕНТНО: преамбула `table…; delete table…` сбрасывает нашу
+# таблицу перед пересозданием. Иначе повторный `nft -f /etc/nftables.conf`
+# (при старте/рестарте nftables.service поверх уже загруженной таблицы)
+# ДОБАВЛЯЕТ правила заново → дубли в prerouting/input. Трогаем только inet filter,
+# таблицы Docker (iptables-nft) не затрагиваются. nft -f применяет файл атомарно.
 - name: Save ruleset for persistence across reboots
   shell: |
-    printf '#!/usr/sbin/nft -f\n\n' > /etc/nftables.conf
-    nft list table inet filter >> /etc/nftables.conf
+    {
+      printf '#!/usr/sbin/nft -f\n\n'
+      printf 'table inet filter\ndelete table inet filter\n\n'
+      nft list table inet filter
+    } > /etc/nftables.conf
   args:
     executable: /bin/bash
 
