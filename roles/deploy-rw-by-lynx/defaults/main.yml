@@ -6,7 +6,9 @@ target_dir: /opt/nginx
 templates_repo_url: https://github.com/Mrvibecodic/node-templates
 templates_repo_version: main
 nginx_image: nginx:alpine
-remnanode_image: ghcr.io/legiz-ru/remnanode-smux:latest
+remnanode_image: remnawave/node:latest
+#remnanode_image: ghcr.io/legiz-ru/remnanode-smux:latest
+custom_core_url: https://github.com/Jolymmiles/Xray-core/releases/download/v26.8.10/Xray-linux-64
 docker_pull_policy: always
 fake_site_force_regenerate: false
 service_key_path: "~/.ssh/id_ed25519"
