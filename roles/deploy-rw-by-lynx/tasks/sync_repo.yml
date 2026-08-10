@@ -12,6 +12,7 @@
   loop:
     - "{{ target_dir }}"
     - "{{ target_dir }}/conf.d"
+    - "{{ target_dir }}/html"
     - "{{ target_dir }}/certs"
     - "{{ target_dir }}/template-source"
     - "{{ target_dir }}/site-staging"
@@ -28,12 +29,13 @@
           restart: unless-stopped
           ports:
             - "443:443/tcp"
+            - "443:443/udp"
           volumes:
-            - ./conf.d:/etc/nginx/conf.d:ro
+            - ./conf.d:/etc/nginx/conf.d
             - ./nginx.conf:/etc/nginx/nginx.conf:ro
-            - ./html:/usr/share/nginx/html:ro
+            - ./html:/usr/share/nginx/html
             - ./certs:/etc/nginx/certs:ro
-            - /dev/shm:/dev/shm
+            - /dev/shm/:/dev/shm/
           logging:
             driver: json-file
             options:
@@ -45,6 +47,13 @@
               hard: 1048576
           extra_hosts:
             - host.docker.internal:host-gateway
+
+- name: Preserve nginx environment file
+  ansible.builtin.copy:
+    content: ''
+    dest: "{{ target_dir }}/.env"
+    mode: '0644'
+    force: false
 - name: Select fake-site template
   ansible.builtin.set_fact:
     selected_template: "{{ template | default('esports-stream-template') }}"
@@ -63,10 +72,20 @@
     path: "{{ target_dir }}/template-source/{{ selected_template }}"
   register: template_stat
 
-- name: Require selected template
+- name: Fall back to the default fake-site template
+  ansible.builtin.set_fact:
+    selected_template: esports-stream-template
+  when: not template_stat.stat.isdir
+
+- name: Check resolved fake-site template
+  ansible.builtin.stat:
+    path: "{{ target_dir }}/template-source/{{ selected_template }}"
+  register: resolved_template_stat
+
+- name: Require resolved fake-site template
   ansible.builtin.assert:
-    that: template_stat.stat.isdir
-    fail_msg: "Template {{ selected_template }} does not exist in {{ templates_repo_url }}."
+    that: resolved_template_stat.stat.isdir
+    fail_msg: "Default template esports-stream-template does not exist in {{ templates_repo_url }}."
 
 - name: Read previously generated template marker
   ansible.builtin.slurp:

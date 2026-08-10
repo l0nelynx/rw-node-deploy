@@ -68,7 +68,7 @@
       ansible.builtin.include_role:
         name: deploy-rw-by-lynx
         tasks_from: warp_watchdog
-      when: install_warp | default(false) | bool or not (warp_watchdog_enabled | default(false) | bool)
+      when: install_warp | default(false) | bool
 
 # Play 3: Основной деплой — всегда по сервисному ключу
 - name: Deploy Remnawave Node

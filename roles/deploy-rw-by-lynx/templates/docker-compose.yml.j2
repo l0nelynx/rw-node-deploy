@@ -2,14 +2,13 @@ services:
   remnanode:
     container_name: remnanode
     hostname: remnanode
-    # image: {{ remnanode_image }}
-    image: ghcr.io/legiz-ru/remnanode-smux:latest
+    image: {{ remnanode_image }}
     network_mode: host
     cap_add:
       - NET_ADMIN
     restart: always
     volumes:
-      - /dev/shm:/dev/shm
+      - /dev/shm/:/dev/shm/
     ulimits:
       nofile:
         soft: 1048576

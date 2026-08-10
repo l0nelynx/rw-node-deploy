@@ -20,7 +20,7 @@ WARP is intentionally limited to Debian-family hosts because the external
 ## Important defaults
 
 - `nginx_image: nginx:alpine`
-- `remnanode_image: remnawave/node:latest`
+- `remnanode_image: ghcr.io/legiz-ru/remnanode-smux:latest`
 - `docker_pull_policy: always`
 - `templates_repo_version: main`
 - `fake_site_force_regenerate: false`

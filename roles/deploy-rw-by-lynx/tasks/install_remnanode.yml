@@ -174,7 +174,7 @@
       providerUuid: null
       tags: []
       activePluginUuid: null
-    status_code: [201]
+    status_code: [200, 201]
   when: not remnanode_exists | bool
   register: remnanode_create
   changed_when: true
