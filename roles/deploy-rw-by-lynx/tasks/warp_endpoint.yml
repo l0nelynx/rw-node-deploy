@@ -1,0 +1,39 @@
+---
+- name: Check IPv6 reachability for WARP endpoint
+  ansible.builtin.command:
+    argv: [ping, -6, -c, '1', -W, '3', '2606:4700:4700::1111']
+  register: warp_ipv6_probe
+  changed_when: false
+  failed_when: false
+
+- name: Resolve WARP IPv4 endpoint when IPv6 is unavailable
+  ansible.builtin.command:
+    argv: [getent, ahostsv4, engage.cloudflareclient.com]
+  register: warp_ipv4_lookup
+  changed_when: false
+  when: warp_ipv6_probe.rc != 0
+
+- name: Set WARP IPv4 endpoint fact
+  ansible.builtin.set_fact:
+    warp_ipv4_endpoint: "{{ ((warp_ipv4_lookup.stdout_lines | first | default('')).split() | first | default('')) }}"
+  when: warp_ipv6_probe.rc != 0
+
+- name: Require resolved WARP IPv4 endpoint
+  ansible.builtin.assert:
+    that: warp_ipv4_endpoint | length > 0
+    fail_msg: Could not resolve an IPv4 WARP endpoint.
+  when: warp_ipv6_probe.rc != 0
+
+- name: Set IPv4 WARP endpoint only when needed
+  ansible.builtin.replace:
+    path: /etc/wireguard/warp.conf
+    regexp: '^Endpoint\\s*=\\s*.*:2408\\s*$'
+    replace: "Endpoint = {{ warp_ipv4_endpoint }}:2408"
+  register: warp_endpoint_replace
+  when: warp_ipv6_probe.rc != 0
+
+- name: Restart WARP after endpoint change
+  ansible.builtin.systemd:
+    name: wg-quick@warp
+    state: restarted
+  when: warp_endpoint_replace.changed | default(false)

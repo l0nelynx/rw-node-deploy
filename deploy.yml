@@ -3,22 +3,25 @@
 - name: Bootstrap SSH service key
   hosts: webservers
   gather_facts: false
+  serial: 1
+  any_errors_fatal: true
   vars:
-    service_key_path: "~/.ssh/id_ed25519"
+    service_key_path: "~/.ssh/id_ed25519_rw_deploy"
     # Если root_pass задан — подключаемся по паролю, иначе по мастер-ключу {{master_key}}
-    ansible_password: "{{ root_pass | default(omit) }}"
+    ansible_password: "{{ root_pass | default(omit, true) }}"
     ansible_ssh_private_key_file: >-
       {{
-        (root_pass is defined) | ternary(
+        (root_pass | default('', true) | length > 0) | ternary(
           omit,
-          (master_key | expanduser) if (master_key.startswith('/') or master_key.startswith('~'))
-          else (playbook_dir + '/' + master_key)
+          (master_key | default('') | expanduser) if ((master_key | default('')).startswith('/') or (master_key | default('')).startswith('~'))
+          else (playbook_dir + '/' + (master_key | default('')))
         )
       }}
-    # Отключаем проверку ключей для bootstrap-этапа (особенно важно при использовании пароля)
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
+    # Trust a host only on its first connection. Subsequent plays use normal
+    # host-key verification from ansible.cfg.
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new'
   tasks:
-    - import_role:
+    - ansible.builtin.import_role:
         name: deploy-rw-by-lynx
         tasks_from: install_keys.yml
 
@@ -26,60 +29,56 @@
 - name: Install WARP
   hosts: webservers
   become: true
+  serial: 1
+  any_errors_fatal: true
   tags: [warp]
   vars:
-    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=6'
+    ansible_ssh_private_key_file: "{{ service_key_path | default('~/.ssh/id_ed25519_rw_deploy') | expanduser }}"
+  pre_tasks:
+    - name: Reject WARP on unsupported operating systems
+      ansible.builtin.assert:
+        that: ansible_facts.os_family == 'Debian'
+        fail_msg: install_warp=true is supported only on Debian/Ubuntu hosts.
+      when: install_warp | default(false) | bool
   roles:
     - role: warp_native
       when: install_warp | default(false) | bool
   tasks:
-    # Исправить endpoint на IPv4 если IPv6 недоступен (роль это не делает)
-    - name: Fix WARP endpoint if IPv6 is unavailable
+    - name: Apply idempotent WARP endpoint configuration
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_endpoint
       when: install_warp | default(false) | bool
-      shell: |
-        CONF=/etc/wireguard/warp.conf
-        if ping6 -c1 -W3 2606:4700:4700::1111 >/dev/null 2>&1; then
-          echo "ipv6_ok: keeping default endpoint"
-        else
-          IPV4=$(python3 -c "import socket; print(socket.getaddrinfo('engage.cloudflareclient.com',2408,socket.AF_INET)[0][4][0])" 2>/dev/null)
-          if [ -n "$IPV4" ]; then
-            sed -i "s|Endpoint = .*:2408|Endpoint = ${IPV4}:2408|" "$CONF"
-            systemctl restart wg-quick@warp
-            echo "ipv6_broken: forced endpoint ${IPV4}, restarted"
-          fi
-        fi
-      args:
-        executable: /bin/bash
-      register: warp_endpoint_fix
-
-    - name: Show endpoint decision
-      when: install_warp | default(false) | bool
-      debug:
-        msg: "{{ warp_endpoint_fix.stdout }}"
 
     # WARP+ — пробуем per-host ключ (warp_plus), затем общий пул warp_plus.json.
     # Вся логика вынесена в роль, чтобы переиспользовать переменные и шаблоны.
     - name: Apply WARP+ from key pool
-      include_role:
+      ansible.builtin.include_role:
         name: deploy-rw-by-lynx
         tasks_from: warp_plus
       when: install_warp | default(false) | bool
 
+    - name: Reconcile WARP endpoint after key changes
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_endpoint
+      when: install_warp | default(false) | bool
+
     # Watchdog: перезапускает интерфейс warp при устаревшем handshake.
     - name: Setup WARP watchdog
-      include_role:
+      ansible.builtin.include_role:
         name: deploy-rw-by-lynx
         tasks_from: warp_watchdog
-      when: install_warp | default(false) | bool
+      when: install_warp | default(false) | bool or not (warp_watchdog_enabled | default(false) | bool)
 
 # Play 3: Основной деплой — всегда по сервисному ключу
 - name: Deploy Remnawave Node
   hosts: webservers
   become: true
+  serial: 1
+  any_errors_fatal: true
   vars:
-    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=6'
+    ansible_ssh_private_key_file: "{{ service_key_path | default('~/.ssh/id_ed25519_rw_deploy') | expanduser }}"
 #  vars_prompt:
 #    - name: cf_token
 #      prompt: "Cloudflare API Token"

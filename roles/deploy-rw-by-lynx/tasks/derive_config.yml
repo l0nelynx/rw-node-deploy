@@ -1,0 +1,43 @@
+---
+- name: Ensure deployment directories required by DNS and configuration tags
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ target_dir }}"
+    - "{{ target_dir }}/conf.d"
+    - "{{ target_dir }}/certs"
+
+- name: Get current public IPv4 address
+  ansible.builtin.uri:
+    url: https://api.ipify.org
+    return_content: true
+    timeout: 20
+  register: public_ip_result
+  changed_when: false
+
+- name: Set current public IPv4 address
+  ansible.builtin.set_fact:
+    current_ip: "{{ public_ip_result.content | trim }}"
+
+- name: Assert public IPv4 format
+  ansible.builtin.assert:
+    that: current_ip is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+    fail_msg: api.ipify.org did not return an IPv4 address.
+
+- name: Reset computed subdomains
+  ansible.builtin.set_fact:
+    subdomains: []
+
+- name: Build subdomain list
+  ansible.builtin.set_fact:
+    subdomains: >-
+      {{ subdomains + [{
+        'sub_idx': '%02d' | format(item),
+        'target_idx': '%02d' | format(item + 1),
+        'port': 10001 + item,
+        'sub_full': sub_mask + ('%02d' | format(item)) + '.' + main_domain,
+        'pp': (pp_map[item - 1] | default(0)) | int | bool
+      }] }}
+  loop: "{{ range(1, sub_count | int + 1) | list }}"

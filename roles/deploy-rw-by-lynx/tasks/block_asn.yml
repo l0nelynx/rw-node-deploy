@@ -1,172 +1,177 @@
-# ── Firewall: nftables (replaces ufw) ───────────────────────────
-- name: Install nftables and wget
-  package:
-    name:
-      - nftables
-      - wget
+---
+- name: Install nftables
+  ansible.builtin.package:
+    name: nftables
     state: present
 
-# ufw конфликтует с прямым управлением nftables
-- name: Disable ufw if present
-  service:
-    name: ufw
-    state: stopped
-    enabled: false
-  ignore_errors: true
+- name: Stop and disable UFW when installed
+  block:
+    - name: Collect service facts
+      ansible.builtin.service_facts:
 
-# Собственный whitelist — IP из этого списка всегда accept, независимо от ASN blacklist.
-# Файл лежит в корне проекта (gitignored). Применяется только если существует.
-- name: Check for project-root whitelist.nft
-  stat:
-    path: "{{ playbook_dir }}/whitelist.nft"
+    - name: Stop and disable UFW
+      ansible.builtin.systemd:
+        name: ufw.service
+        state: stopped
+        enabled: false
+      when: "'ufw.service' in ansible_facts.services"
+
+- name: Ensure firewall cache directory exists
+  ansible.builtin.file:
+    path: /var/lib/rw-node-firewall
+    state: directory
+    mode: '0700'
+
+- name: Check for controller-side whitelist
+  ansible.builtin.stat:
+    path: "{{ firewall_whitelist_path }}"
   delegate_to: localhost
   become: false
-  run_once: true
-  register: whitelist_stat
+  register: firewall_whitelist_stat
 
-- name: Set whitelist_present fact
-  set_fact:
-    whitelist_present: "{{ whitelist_stat.stat.exists }}"
-
-- name: Copy whitelist.nft
-  copy:
-    src: "{{ playbook_dir }}/whitelist.nft"
-    dest: /tmp/whitelist.nft
+- name: Copy controller whitelist when present
+  ansible.builtin.copy:
+    src: "{{ firewall_whitelist_path }}"
+    dest: /var/lib/rw-node-firewall/whitelist.nft.download
     mode: '0600'
-  when: whitelist_present
+  when: firewall_whitelist_stat.stat.exists
 
-# Шаг 1: Сбрасываем всё, грузим whitelist, затем блэклисты.
-# После flush ruleset и до загрузки наших цепочек — таблица существует (из whitelist.nft/blacklist.nft),
-# но ни одного hook не зарегистрировано, поэтому SSH не прерывается.
-- name: Flush ruleset and load ASN blacklists
-  shell: |
-    set -e
-    WORKDIR=$(mktemp -d)
-    cd "$WORKDIR"
+- name: Remove cached whitelist when controller whitelist is absent
+  ansible.builtin.file:
+    path: /var/lib/rw-node-firewall/whitelist.nft.download
+    state: absent
+  when: not firewall_whitelist_stat.stat.exists
 
-    echo "Downloading nftables sets..."
-    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v4.nft
-    wget -q https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
+- name: Download candidate IPv4 ASN blacklist
+  ansible.builtin.get_url:
+    url: "{{ firewall_blacklist_urls.v4 }}"
+    dest: /var/lib/rw-node-firewall/blacklist-v4.nft.download
+    mode: '0600'
+    force: true
+    timeout: 30
 
-    nft flush ruleset
+- name: Download candidate IPv6 ASN blacklist
+  ansible.builtin.get_url:
+    url: "{{ firewall_blacklist_urls.v6 }}"
+    dest: /var/lib/rw-node-firewall/blacklist-v6.nft.download
+    mode: '0600'
+    force: true
+    timeout: 30
 
-    if [ -f /tmp/whitelist.nft ]; then
-      echo "Loading whitelist set into inet filter..."
-      nft -f /tmp/whitelist.nft
+- name: Normalize panel control source addresses
+  ansible.builtin.set_fact:
+    firewall_panel_sources: >-
+      {{ panel_control_ip if (panel_control_ip is defined and panel_control_ip is sequence and panel_control_ip is not string)
+         else ([panel_control_ip] if panel_control_ip is defined and panel_control_ip | length > 0 else []) }}
+
+- name: Validate panel control source addresses
+  ansible.builtin.assert:
+    that: >-
+      item is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+      or item is match('^[0-9A-Fa-f:]+$')
+    fail_msg: panel_control_ip contains an invalid IP address.
+  loop: "{{ firewall_panel_sources }}"
+
+- name: Split panel control source addresses by address family
+  ansible.builtin.set_fact:
+    firewall_panel_ipv4: "{{ firewall_panel_sources | select('match', '^([0-9]{1,3}\\.){3}[0-9]{1,3}$') | list }}"
+    firewall_panel_ipv6: "{{ firewall_panel_sources | select('search', ':') | list }}"
+
+- name: Detect IPv4 whitelist set
+  ansible.builtin.command:
+    argv: [grep, -Eq, 'set[[:space:]]+whitelist_v4', /var/lib/rw-node-firewall/whitelist.nft.download]
+  register: whitelist_v4_check
+  changed_when: false
+  failed_when: false
+  when: firewall_whitelist_stat.stat.exists
+
+- name: Detect IPv6 whitelist set
+  ansible.builtin.command:
+    argv: [grep, -Eq, 'set[[:space:]]+whitelist_v6', /var/lib/rw-node-firewall/whitelist.nft.download]
+  register: whitelist_v6_check
+  changed_when: false
+  failed_when: false
+  when: firewall_whitelist_stat.stat.exists
+
+- name: Render managed inet filter chains
+  ansible.builtin.template:
+    src: rw-node-firewall-rules.nft.j2
+    dest: /var/lib/rw-node-firewall/rules.nft
+    mode: '0600'
+
+- name: Validate and apply complete managed nftables ruleset
+  ansible.builtin.shell: |
+    set -euo pipefail
+    WORKDIR="$(mktemp -d)"
+    trap 'rm -rf "$WORKDIR"' EXIT
+    CANDIDATE="$WORKDIR/nftables.conf"
+
+    extract_filter_body() {
+      awk '
+        /^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{/ {
+          inside=1; depth=1; next
+        }
+        inside {
+          opens=gsub(/\{/, "{")
+          closes=gsub(/\}/, "}")
+          depth += opens - closes
+          if (depth == 0) { exit }
+          print
+        }
+      ' "$1"
+    }
+
+    for fragment in \
+      /var/lib/rw-node-firewall/blacklist-v4.nft.download \
+      /var/lib/rw-node-firewall/blacklist-v6.nft.download; do
+      test -s "$fragment"
+      grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{' "$fragment"
+      ! grep -Eq '^[[:space:]]*chain[[:space:]]' "$fragment"
+    done
+    grep -Eq 'set[[:space:]]+blacklist_v4' /var/lib/rw-node-firewall/blacklist-v4.nft.download
+    grep -Eq 'set[[:space:]]+blacklist_v6' /var/lib/rw-node-firewall/blacklist-v6.nft.download
+
+    if [ -f /var/lib/rw-node-firewall/whitelist.nft.download ]; then
+      grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{' /var/lib/rw-node-firewall/whitelist.nft.download
+      ! grep -Eq '^[[:space:]]*chain[[:space:]]' /var/lib/rw-node-firewall/whitelist.nft.download
     fi
 
-    echo "Loading blacklist sets into inet filter..."
-    nft -f blacklist-v4.nft
-    nft -f blacklist-v6.nft
-
-    rm -rf "$WORKDIR"
-  args:
-    executable: /bin/bash
-  register: nft_blacklist_output
-
-# Панель управления: порт открывается только для доверенных IP (panel_control_ip).
-# panel_control_ip может быть одной строкой или списком; нормализуем в список.
-# Если panel_control_ip не задан — правило не добавляется вовсе (порт закрыт).
-- name: Normalize panel control source IPs
-  set_fact:
-    panel_control_ips: "{{ panel_control_ip if (panel_control_ip is sequence and panel_control_ip is not string) else [panel_control_ip] }}"
-  when: panel_control_ip is defined and panel_control_ip | length > 0
-
-# Шаг 2: Пишем правила в файл через Ansible (без heredoc — YAML-safe).
-# prerouting priority -150: после conntrack (-200), до Docker DNAT (-100).
-# Это означает: blacklisted IP дропается до того как Docker перенаправит пакет в контейнер.
-- name: Write nftables filter rules to file
-  copy:
-    dest: /tmp/nft_filter.nft
-    mode: '0600'
-    content: |
-      table inet filter {
-          chain prerouting {
-              type filter hook prerouting priority -150; policy accept;
-      {% if whitelist_present %}
-              ip saddr @whitelist_v4 accept
-      {% endif %}
-              ip  saddr @blacklist_v4 counter drop
-              ip6 saddr @blacklist_v6 counter drop
-          }
-
-          chain input {
-              type filter hook input priority 0; policy drop;
-              ct state established,related accept
-              ct state invalid drop
-              iif lo accept
-              ip saddr 172.22.0.0/16 accept
-              tcp dport 22 accept
-      {% if panel_control_ips is defined %}
-              ip saddr { {{ panel_control_ips | join(', ') }} } tcp dport {{ panel_control_port }} accept
-      {% endif %}
-              udp sport 2408 accept
-              tcp dport 443 accept
-              udp dport 443 accept
-              udp dport 8443 accept
-              tcp dport 8443 accept
-              icmp  type echo-request accept
-              icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, nd-router-solicit } accept
-          }
-
-          chain forward {
-              type filter hook forward priority 0; policy accept;
-          }
-
-          chain output {
-              type filter hook output priority 0; policy accept;
-          }
-      }
-
-# Шаг 3: Загружаем атомарно — все цепочки и правила применяются одним вызовом.
-# Нет промежуточного состояния "policy drop без accept-правил" → SSH не рвётся.
-- name: Load nftables filter rules atomically
-  command: nft -f /tmp/nft_filter.nft
-
-- name: Remove temporary rule files
-  file:
-    path: "{{ item }}"
-    state: absent
-  loop:
-    - /tmp/nft_filter.nft
-    - /tmp/whitelist.nft
-
-# Docker использует iptables-nft для NAT. После nft flush ruleset его цепочки пропали —
-# перезапускаем Docker чтобы он пересоздал их до старта контейнеров.
-- name: Restart Docker to rebuild iptables NAT chains
-  service:
-    name: docker
-    state: restarted
-
-- name: Reset SSH connection after Docker restart (clears stale ControlMaster socket)
-  meta: reset_connection
-
-- name: Wait for SSH to be available after Docker restart
-  wait_for_connection:
-    delay: 15
-    timeout: 180
-
-# Сохраняем ИДЕМПОТЕНТНО: преамбула `table…; delete table…` сбрасывает нашу
-# таблицу перед пересозданием. Иначе повторный `nft -f /etc/nftables.conf`
-# (при старте/рестарте nftables.service поверх уже загруженной таблицы)
-# ДОБАВЛЯЕТ правила заново → дубли в prerouting/input. Трогаем только inet filter,
-# таблицы Docker (iptables-nft) не затрагиваются. nft -f применяет файл атомарно.
-- name: Save ruleset for persistence across reboots
-  shell: |
     {
-      printf '#!/usr/sbin/nft -f\n\n'
-      printf 'table inet filter\ndelete table inet filter\n\n'
-      nft list table inet filter
-    } > /etc/nftables.conf
+      printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\ntable inet filter {\n'
+      extract_filter_body /var/lib/rw-node-firewall/blacklist-v4.nft.download
+      extract_filter_body /var/lib/rw-node-firewall/blacklist-v6.nft.download
+      if [ -f /var/lib/rw-node-firewall/whitelist.nft.download ]; then
+        extract_filter_body /var/lib/rw-node-firewall/whitelist.nft.download
+      fi
+      cat /var/lib/rw-node-firewall/rules.nft
+      printf '}\n'
+    } > "$CANDIDATE"
+
+    nft -c -f "$CANDIDATE"
+    install -D -m 0600 "$CANDIDATE" /etc/nftables.conf.new
+    nft -f "$CANDIDATE"
+    mv /etc/nftables.conf.new /etc/nftables.conf
+    install -m 0600 /var/lib/rw-node-firewall/blacklist-v4.nft.download /var/lib/rw-node-firewall/blacklist-v4.nft
+    install -m 0600 /var/lib/rw-node-firewall/blacklist-v6.nft.download /var/lib/rw-node-firewall/blacklist-v6.nft
+    echo applied
   args:
     executable: /bin/bash
+  register: firewall_apply
+  changed_when: true
 
-- name: Enable nftables service
-  service:
-    name: nftables
+- name: Enable managed nftables rules at boot
+  ansible.builtin.systemd:
+    name: nftables.service
     state: started
     enabled: true
 
-- name: Show blacklist load result
-  debug:
-    var: nft_blacklist_output.stdout_lines
+- name: Rebuild Docker nftables rules after a full firewall replacement
+  ansible.builtin.systemd:
+    name: docker.service
+    state: restarted
+  when: firewall_apply.changed
+
+- name: Verify SSH remains reachable after firewall reconciliation
+  ansible.builtin.wait_for_connection:
+    timeout: 60
+  when: firewall_apply.changed

@@ -1,24 +1,34 @@
-# Пробуем один ключ-кандидат. Вызывается в цикле из warp_plus.yml,
-# guard `when: not warp_plus_done` на include пропускает остальные ключи
-# после первого успешного.
-- name: "Apply WARP+ license key {{ warp_key[:8] }}…"
-  command: wgcf update --license-key {{ warp_key }}
+# A failed update can be caused by rate limiting or a transient network problem.
+# Keep a pool key eligible unless an operator explicitly marks it invalid.
+- name: Apply a WARP+ license key
+  ansible.builtin.command:
+    argv: [wgcf, update, --license-key, "{{ warp_key }}"]
   args:
     chdir: /root
   register: warp_upd
   failed_when: false
   changed_when: warp_upd.rc == 0
+  no_log: true
+
+- name: Verify WARP account type after successful update
+  ansible.builtin.shell: |
+    set -o pipefail
+    wgcf status 2>/dev/null | grep -i 'Account type' | awk -F': ' '{print $2}' | xargs | tr '[:upper:]' '[:lower:]'
+  args:
+    chdir: /root
+    executable: /bin/bash
+  register: warp_updated_account_type
+  changed_when: false
+  failed_when: false
+  when: warp_upd.rc == 0
 
 - name: Record key attempt result
-  set_fact:
-    warp_plus_done: "{{ warp_upd.rc == 0 or warp_plus_done }}"
-    warp_applied_key: "{{ warp_key if warp_upd.rc == 0 else warp_applied_key }}"
-    warp_invalid_keys: "{{ warp_invalid_keys + ([warp_key] if warp_upd.rc != 0 else []) }}"
+  ansible.builtin.set_fact:
+    warp_plus_done: "{{ (warp_upd.rc == 0 and 'unlimited' in (warp_updated_account_type.stdout | default(''))) or warp_plus_done }}"
+    warp_applied_key: "{{ warp_key if (warp_upd.rc == 0 and 'unlimited' in (warp_updated_account_type.stdout | default(''))) else warp_applied_key }}"
+  no_log: true
 
-- name: Warn when a key was rejected
-  debug:
-    msg: >-
-      WARP+ key {{ warp_key[:8] }}… rejected on {{ inventory_hostname }}
-      ({{ warp_upd.stderr | default('') | regex_search('[0-9]+ [A-Za-z ]+') | default('no detail') }}).
-      Marked still_valid=false; trying next candidate.
-  when: warp_upd.rc != 0
+- name: Report unsuccessful WARP+ key update without invalidating the pool
+  ansible.builtin.debug:
+    msg: "A WARP+ key update did not complete; the key remains eligible for a later retry."
+  when: warp_upd.rc != 0 or 'unlimited' not in (warp_updated_account_type.stdout | default(''))

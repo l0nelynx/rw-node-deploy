@@ -1,9 +1,7 @@
-# ── 2. Collecting proxy_protocol preferences ──────────────────
-# Ansible не поддерживает интерактивные вопросы в цикле через vars_prompt,
-# поэтому передаём их через extra-vars при запуске:
-# -e '{"pp_map": [1, 0, 1]}'
-# Индекс 0 соответствует субдомену 01, индекс 1 — 02, и т.д.
-# Если pp_map не передан — по умолчанию все нули.
-- name: Set default pp_map if not provided
-  set_fact:
-    pp_map: "{{ pp_map | default([]) }}"
+---
+# Kept as a compatibility task file for callers that import it directly.
+- name: Assert proxy-protocol map values
+  ansible.builtin.assert:
+    that: item | int in [0, 1]
+    fail_msg: pp_map accepts only 0 or 1 values.
+  loop: "{{ pp_map | default([]) }}"

@@ -1,22 +1,50 @@
-# ── 6. Docker Compose ─────────────────────────────────────────
-- name: Stop existing containers
-  community.docker.docker_compose_v2:
-    project_src: "{{ target_dir }}"
-    state: absent
-    remove_orphans: true
-  ignore_errors: true
+---
+- name: Validate nginx configuration before applying it
+  ansible.builtin.command:
+    argv:
+      - docker
+      - run
+      - --rm
+      - -v
+      - "{{ target_dir }}/nginx.conf:/etc/nginx/nginx.conf:ro"
+      - -v
+      - "{{ target_dir }}/conf.d:/etc/nginx/conf.d:ro"
+      - -v
+      - "{{ target_dir }}/certs:/etc/nginx/certs:ro"
+      - "{{ nginx_image }}"
+      - nginx
+      - -t
+  changed_when: false
 
-- name: Start containers
+- name: Pull and reconcile nginx containers
   community.docker.docker_compose_v2:
     project_src: "{{ target_dir }}"
     state: present
+    pull: "{{ docker_pull_policy }}"
+    recreate: "{{ 'always' if nginx_config_changed | default(false) | bool else 'auto' }}"
+    remove_orphans: true
+  register: nginx_compose
 
-- name: Show container logs (last 50 lines)
-  command: docker compose logs --tail=50
+- name: Record deployed nginx image ID
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, '{% raw %}{{.Id}}{% endraw %}', "{{ nginx_image }}"]
+  register: nginx_image_id
+  changed_when: false
+
+- name: Report deployed nginx image ID
+  ansible.builtin.debug:
+    msg: "Nginx image ID: {{ nginx_image_id.stdout }}"
+  changed_when: false
+
+- name: Verify nginx container is running
+  ansible.builtin.command:
+    argv: [docker, compose, ps, --status, running, --services]
   args:
     chdir: "{{ target_dir }}"
-  register: compose_logs
+  register: nginx_running_services
+  changed_when: false
 
-- name: Print container logs
-  debug:
-    msg: "{{ compose_logs.stdout_lines }}"
+- name: Require running nginx container
+  ansible.builtin.assert:
+    that: "'nginx' in nginx_running_services.stdout_lines"
+    fail_msg: Nginx container did not reach the running state.

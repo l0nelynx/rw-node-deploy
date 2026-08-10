@@ -1,32 +1,78 @@
-- name: Wait for apt lock to be released
-  shell: |
-    while fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock >/dev/null 2>&1; do
-      sleep 5
-    done
-  args:
-    executable: /bin/bash
-  changed_when: false
-  timeout: 300
+---
+- name: Install Docker prerequisites on Debian-family hosts
+  ansible.builtin.apt:
+    name: [ca-certificates, curl, gnupg]
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+    lock_timeout: 300
+  when: ansible_facts.os_family == 'Debian'
 
-- name: Download Docker install script
-  get_url:
-    url: https://get.docker.com
-    dest: /tmp/get-docker.sh
+- name: Create Docker apt keyring directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
     mode: '0755'
+  when: ansible_facts.os_family == 'Debian'
 
-- name: Run Docker install script
-  command: sh /tmp/get-docker.sh
-  args:
-    creates: /usr/bin/docker    # не запускать повторно если docker уже есть
+- name: Install Docker apt signing key
+  ansible.builtin.get_url:
+    url: "https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}/gpg"
+    dest: /etc/apt/keyrings/docker.asc
+    mode: '0644'
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Configure Docker apt repository
+  ansible.builtin.apt_repository:
+    repo: >-
+      deb [arch={{ 'amd64' if ansible_facts.architecture == 'x86_64' else 'arm64' }} signed-by=/etc/apt/keyrings/docker.asc]
+      https://download.docker.com/linux/{{ ansible_facts.distribution | lower }}
+      {{ ansible_facts.distribution_release }} stable
+    filename: docker
+    state: present
+    update_cache: true
+  when: ansible_facts.os_family == 'Debian'
+
+- name: Install Docker repository support on RedHat-family hosts
+  ansible.builtin.dnf:
+    name: dnf-plugins-core
+    state: present
+  when: ansible_facts.os_family == 'RedHat'
+
+- name: Configure Docker dnf repository
+  ansible.builtin.yum_repository:
+    name: docker-ce-stable
+    description: Docker CE Stable
+    baseurl: https://download.docker.com/linux/rhel/$releasever/$basearch/stable
+    gpgcheck: true
+    gpgkey: https://download.docker.com/linux/rhel/gpg
+    enabled: true
+  when: ansible_facts.os_family == 'RedHat'
+
+- name: Install Docker Engine and Compose plugin
+  ansible.builtin.package:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-buildx-plugin
+      - docker-compose-plugin
+    state: present
 
 - name: Start and enable Docker
-  service:
+  ansible.builtin.service:
     name: docker
     state: started
     enabled: true
 
-- name: Add user to docker group
-  user:
+- name: Add non-root SSH user to docker group
+  ansible.builtin.user:
     name: "{{ ansible_user }}"
     groups: docker
     append: true
+  when: ansible_user != 'root'
+
+- name: Verify Docker Compose v2 is available
+  ansible.builtin.command:
+    argv: [docker, compose, version]
+  changed_when: false

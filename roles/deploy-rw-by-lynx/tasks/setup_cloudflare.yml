@@ -1,43 +1,20 @@
-# ── 4. Cloudflare DNS ─────────────────────────────────────────
-- name: Create DNS record for reality domain
-  uri:
-    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ cf_token }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      type: A
-      name: "{{ reality_domain }}"
-      content: "{{ current_ip }}"
-      ttl: 1
-      proxied: false
-    status_code: [200, 201, 409]
-  register: dns_reality
-  failed_when: >
-    dns_reality.json.success is defined
-    and not dns_reality.json.success
-    and 'already exists' not in (dns_reality.json.errors | default([]) | map(attribute='message') | join(''))
+---
+- name: Assert Cloudflare deployment inputs
+  ansible.builtin.assert:
+    that:
+      - cf_token is defined
+      - cf_token | length > 0
+      - cf_zone_id is defined
+      - cf_zone_id is match('^[A-Za-z0-9]+$')
+    fail_msg: cf_token and cf_zone_id are required for DNS reconciliation.
+  no_log: true
 
-- name: Create DNS records for subdomains
-  uri:
-    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ cf_token }}"
-      Content-Type: "application/json"
-    body_format: json
-    body:
-      type: A
-      name: "{{ item.sub_full }}"
-      content: "{{ current_ip }}"
-      ttl: 1
-      proxied: false
-    status_code: [200, 201, 409]
-  loop: "{{ subdomains }}"
-  register: dns_sub
-  failed_when: >
-    dns_sub.json.success is defined
-    and not dns_sub.json.success
-    and 'already exists' not in (dns_sub.json.errors | default([]) | map(attribute='message') | join(''))
+- name: Build desired Cloudflare DNS name list
+  ansible.builtin.set_fact:
+    cf_dns_names: "{{ [reality_domain] + (subdomains | map(attribute='sub_full') | list) }}"
+
+- name: Reconcile Cloudflare A records
+  ansible.builtin.include_tasks: ensure_cloudflare_record.yml
+  loop: "{{ cf_dns_names }}"
+  loop_control:
+    loop_var: cf_dns_name

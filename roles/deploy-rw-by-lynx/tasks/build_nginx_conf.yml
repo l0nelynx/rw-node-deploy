@@ -1,38 +1,27 @@
-# ── 3. Build nginx config ─────────────────────────────────────
-- name: Get current public IP
-  uri:
-    url: https://api.ipify.org
-    return_content: true
-  register: public_ip_result
+---
+- name: Ensure nginx configuration directories exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ target_dir }}"
+    - "{{ target_dir }}/conf.d"
 
-- name: Set current IP fact
-  set_fact:
-    current_ip: "{{ public_ip_result.content | trim }}"
-
-- name: Build subdomain list
-  set_fact:
-    subdomains: >-
-      {{
-        subdomains | default([]) + [{
-          'sub_idx':    '%02d' | format(item),
-          'target_idx': '%02d' | format(item + 1),
-          'port':       10001 + item,
-          'sub_full':   sub_mask + ('%02d' | format(item)) + '.' + main_domain,
-          'pp':         (pp_map[item - 1] | default(0)) | int | bool
-        }]
-      }}
-  loop: "{{ range(1, sub_count | int + 1) | list }}"
-
-- name: Generate default.conf from template
-  template:
+- name: Generate default nginx server configuration
+  ansible.builtin.template:
     src: default.conf.j2
     dest: "{{ target_dir }}/conf.d/default.conf"
-    mode: "0644"
-  notify: Restart nginx containers
+    mode: '0644'
+  register: default_nginx_config
 
-- name: Generate nginx.conf from template
-  template:
+- name: Generate nginx stream configuration
+  ansible.builtin.template:
     src: nginx.conf.j2
     dest: "{{ target_dir }}/nginx.conf"
-    mode: "0644"
-  notify: Restart nginx containers
+    mode: '0644'
+  register: stream_nginx_config
+
+- name: Record whether nginx configuration changed
+  ansible.builtin.set_fact:
+    nginx_config_changed: "{{ default_nginx_config.changed or stream_nginx_config.changed }}"

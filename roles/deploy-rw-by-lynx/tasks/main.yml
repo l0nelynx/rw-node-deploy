@@ -1,41 +1,36 @@
 ---
-# tasks file for roles/deploy-rw-by-lynx
-- import_tasks: install_docker.yml
+- ansible.builtin.import_tasks: preflight.yml
+  tags: [always]
+
+- ansible.builtin.import_tasks: install_docker.yml
   tags: [docker]
 
-- import_tasks: sync_repo.yml
+- ansible.builtin.import_tasks: sync_repo.yml
   tags: [repo]
 
-- import_tasks: collect_pp_flags.yml
-  tags: [nginx, config]
+- ansible.builtin.import_tasks: collect_pp_flags.yml
+  tags: [nginx, config, dns]
 
-- import_tasks: set_sysctl.yml
+- ansible.builtin.import_tasks: derive_config.yml
+  tags: [nginx, config, dns]
+
+- ansible.builtin.import_tasks: set_sysctl.yml
   tags: [sysctl]
 
-- import_tasks: build_nginx_conf.yml
+- ansible.builtin.import_tasks: build_nginx_conf.yml
   tags: [nginx, config]
 
-- import_tasks: setup_cloudflare.yml
+- ansible.builtin.import_tasks: setup_cloudflare.yml
   tags: [dns]
 
-- name: Reset SSH connection before cert generation
-  meta: reset_connection
+- ansible.builtin.import_tasks: make_certs.yml
   tags: [certs]
 
-- name: Wait for SSH after cloudflare/nginx tasks
-  wait_for_connection:
-    delay: 5
-    timeout: 90
-  tags: [certs]
-
-- import_tasks: make_certs.yml
-  tags: [certs]
-
-- import_tasks: block_asn.yml
+- ansible.builtin.import_tasks: block_asn.yml
   tags: [security, firewall]
 
-- import_tasks: run_nginx.yml
+- ansible.builtin.import_tasks: run_nginx.yml
   tags: [nginx]
 
-- import_tasks: install_remnanode.yml
+- ansible.builtin.import_tasks: install_remnanode.yml
   tags: [remnanode]

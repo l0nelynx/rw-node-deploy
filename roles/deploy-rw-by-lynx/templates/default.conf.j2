@@ -1,11 +1,6 @@
 ssl_certificate /etc/nginx/certs/fullchain.crt;
 ssl_certificate_key /etc/nginx/certs/private.key;
 server {
-    listen 80;
-    server_name .{{ main_domain }};
-    return 301 https://$host$request_uri;
-}
-server {
     listen 8443 ssl proxy_protocol;
     server_name {{ main_domain }};
     location / {

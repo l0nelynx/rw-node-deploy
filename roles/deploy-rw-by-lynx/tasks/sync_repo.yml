@@ -1,116 +1,216 @@
-# ── 1. Setup Environment ──────────────────────────────────────
-- name: Install dependencies
-  package:
-    name:
-      - git
-      - unzip
+---
+- name: Install fake-site generation dependencies
+  ansible.builtin.package:
+    name: [git, unzip]
     state: present
 
-- name: Ensure required directories exist
-  file:
+- name: Ensure nginx project directories exist
+  ansible.builtin.file:
     path: "{{ item }}"
     state: directory
-    mode: "0755"
+    mode: '0755'
   loop:
     - "{{ target_dir }}"
     - "{{ target_dir }}/conf.d"
-    - "{{ target_dir }}/html"
     - "{{ target_dir }}/certs"
+    - "{{ target_dir }}/template-source"
+    - "{{ target_dir }}/site-staging"
 
-- name: Create docker-compose.yml for Nginx
-  copy:
+- name: Ensure shared socket volume exists
+  community.docker.docker_volume:
+    name: rw_node_sockets
+    state: present
+
+- name: Render nginx Docker Compose project
+  ansible.builtin.copy:
     dest: "{{ target_dir }}/docker-compose.yml"
-    mode: "0644"
+    mode: '0644'
     content: |
       services:
         nginx:
-          image: nginx:alpine
+          image: {{ nginx_image }}
           container_name: nginx
           restart: unless-stopped
           ports:
             - "443:443/tcp"
-            - "443:443/udp"
           volumes:
-            - ./conf.d:/etc/nginx/conf.d
+            - ./conf.d:/etc/nginx/conf.d:ro
             - ./nginx.conf:/etc/nginx/nginx.conf:ro
-            - ./html:/usr/share/nginx/html
+            - ./html:/usr/share/nginx/html:ro
             - ./certs:/etc/nginx/certs:ro
-            - /dev/shm/:/dev/shm/
-          env_file:
-            - .env
+            - rw_node_sockets:/dev/shm
           logging:
-            driver: "json-file"
+            driver: json-file
             options:
-              max-size: "10m"
-              max-file: "3"
+              max-size: 10m
+              max-file: '3'
           ulimits:
             nofile:
               soft: 1048576
               hard: 1048576
           extra_hosts:
-            - "host.docker.internal:host-gateway"
+            - host.docker.internal:host-gateway
+      volumes:
+        rw_node_sockets:
+          external: true
 
-- name: Ensure .env file exists
-  copy:
-    content: ""
-    dest: "{{ target_dir }}/.env"
-    mode: "0644"
-    force: false
-
-# ── 2. Fake Site Generation ───────────────────────────────────
-
-- name: Remove old temp directory if exists
-  file:
-    path: "{{ target_dir }}/html/temp"
-    state: absent
-
-- name: Clone templates repository
-  git:
-    repo: "{{ templates_repo_url }}"
-    dest: "{{ target_dir }}/html/temp"
-    version: main
-    force: true
-
-- name: Determine template folder
-  set_fact:
+- name: Select fake-site template
+  ansible.builtin.set_fact:
     selected_template: "{{ template | default('esports-stream-template') }}"
 
-- name: Check if selected template exists
-  stat:
-    path: "{{ target_dir }}/html/temp/{{ selected_template }}"
+- name: Synchronize fake-site template source
+  ansible.builtin.git:
+    repo: "{{ templates_repo_url }}"
+    dest: "{{ target_dir }}/template-source"
+    version: "{{ templates_repo_version }}"
+    force: true
+    update: true
+  register: template_checkout
+
+- name: Assert selected template exists
+  ansible.builtin.stat:
+    path: "{{ target_dir }}/template-source/{{ selected_template }}"
   register: template_stat
 
-- name: Fallback to default template if selected not found
-  set_fact:
-    selected_template: "esports-stream-template"
-  when: not template_stat.stat.exists
+- name: Require selected template
+  ansible.builtin.assert:
+    that: template_stat.stat.isdir
+    fail_msg: "Template {{ selected_template }} does not exist in {{ templates_repo_url }}."
 
-- name: Copy uniquify-theme.sh to template folder
-  copy:
-    src: "{{ target_dir }}/html/temp/uniquify-theme.sh"
-    dest: "{{ target_dir }}/html/temp/{{ selected_template }}/uniquify-theme.sh"
-    mode: "0755"
-    remote_src: true
+- name: Read previously generated template marker
+  ansible.builtin.slurp:
+    src: "{{ target_dir }}/.fake_site_template"
+  register: fake_site_marker
+  failed_when: false
+  changed_when: false
 
-- name: Run uniquify-theme.sh
-  shell: "./uniquify-theme.sh"
-  args:
-    chdir: "{{ target_dir }}/html/temp/{{ selected_template }}"
+- name: Check whether a fake site already exists
+  ansible.builtin.stat:
+    path: "{{ target_dir }}/html/index.html"
+  register: fake_site_index
 
-- name: Find generated zip archive
-  find:
-    paths: "{{ target_dir }}/html/temp/{{ selected_template }}"
-    patterns: "*.zip"
-  register: found_zips
+- name: Decide whether fake site needs regeneration
+  ansible.builtin.set_fact:
+    fake_site_regenerate: >-
+      {{ fake_site_force_regenerate | bool
+         or template_checkout.changed
+         or not fake_site_index.stat.exists
+         or fake_site_marker.failed
+         or (fake_site_marker.content | default('') | b64decode | trim != selected_template) }}
 
-- name: Unarchive the fake site
-  unarchive:
-    src: "{{ found_zips.files[0].path }}"
-    dest: "{{ target_dir }}/html/"
-    remote_src: true
-  when: found_zips.matched > 0
+- name: Generate and atomically replace fake site
+  when: fake_site_regenerate | bool
+  block:
+    - name: Reset fake-site staging directory
+      ansible.builtin.file:
+        path: "{{ target_dir }}/site-staging"
+        state: absent
 
-- name: Cleanup temp directory
-  file:
-    path: "{{ target_dir }}/html/temp"
-    state: absent
+    - name: Create fake-site staging directory
+      ansible.builtin.file:
+        path: "{{ target_dir }}/site-staging/site"
+        state: directory
+        mode: '0755'
+
+    - name: Copy selected template into staging
+      ansible.builtin.copy:
+        src: "{{ target_dir }}/template-source/{{ selected_template }}/"
+        dest: "{{ target_dir }}/site-staging/site/"
+        remote_src: true
+        mode: preserve
+
+    - name: Copy theme generator into staging
+      ansible.builtin.copy:
+        src: "{{ target_dir }}/template-source/uniquify-theme.sh"
+        dest: "{{ target_dir }}/site-staging/site/uniquify-theme.sh"
+        remote_src: true
+        mode: '0755'
+
+    - name: Generate unique fake-site archive
+      ansible.builtin.command:
+        argv: [./uniquify-theme.sh]
+      args:
+        chdir: "{{ target_dir }}/site-staging/site"
+      changed_when: true
+
+    - name: Find generated fake-site archive
+      ansible.builtin.find:
+        paths: "{{ target_dir }}/site-staging/site"
+        patterns: '*.zip'
+        file_type: file
+      register: found_zips
+
+    - name: Require exactly one generated fake-site archive
+      ansible.builtin.assert:
+        that: found_zips.matched | int == 1
+        fail_msg: "Expected exactly one generated archive, found {{ found_zips.matched }}."
+
+    - name: Create fake-site replacement directory
+      ansible.builtin.file:
+        path: "{{ target_dir }}/site-staging/site-output"
+        state: directory
+        mode: '0755'
+
+    - name: Unarchive fake site into replacement directory
+      ansible.builtin.unarchive:
+        src: "{{ found_zips.files[0].path }}"
+        dest: "{{ target_dir }}/site-staging/site-output"
+        remote_src: true
+
+    - name: Move current fake site aside
+      ansible.builtin.command:
+        argv: [mv, "{{ target_dir }}/html", "{{ target_dir }}/html.previous"]
+      when: fake_site_index.stat.exists
+      changed_when: true
+
+    - name: Activate generated fake site
+      ansible.builtin.command:
+        argv: [mv, "{{ target_dir }}/site-staging/site-output", "{{ target_dir }}/html"]
+      changed_when: true
+
+    - name: Verify generated fake site entrypoint
+      ansible.builtin.stat:
+        path: "{{ target_dir }}/html/index.html"
+      register: generated_fake_site_index
+
+    - name: Require generated fake site entrypoint
+      ansible.builtin.assert:
+        that: generated_fake_site_index.stat.exists
+        fail_msg: Generated fake site does not contain index.html at its root.
+
+    - name: Remove previous fake site
+      ansible.builtin.file:
+        path: "{{ target_dir }}/html.previous"
+        state: absent
+
+    - name: Save selected template marker
+      ansible.builtin.copy:
+        dest: "{{ target_dir }}/.fake_site_template"
+        content: "{{ selected_template }}\n"
+        mode: '0644'
+
+  rescue:
+    - name: Check for recoverable previous fake site
+      ansible.builtin.stat:
+        path: "{{ target_dir }}/html.previous"
+      register: previous_fake_site
+
+    - name: Check active fake site after failed replacement
+      ansible.builtin.stat:
+        path: "{{ target_dir }}/html"
+      register: active_fake_site
+
+    - name: Restore previous fake site
+      ansible.builtin.command:
+        argv: [mv, "{{ target_dir }}/html.previous", "{{ target_dir }}/html"]
+      when: previous_fake_site.stat.exists and not active_fake_site.stat.exists
+      changed_when: true
+
+    - name: Stop after failed fake-site generation
+      ansible.builtin.fail:
+        msg: Fake-site generation failed; the previous site was restored when available.
+
+- name: Show synchronized fake-site source revision
+  ansible.builtin.debug:
+    msg: "Fake-site source revision: {{ template_checkout.after | default('unchanged') }}"
+  changed_when: false

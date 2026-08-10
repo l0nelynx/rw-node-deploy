@@ -1,38 +1,37 @@
-Role Name
-=========
+# deploy-rw-by-lynx
 
-A brief description of the role goes here
+Deploys an nginx stream proxy and a Remnawave v3 node with Docker, DNS
+reconciliation, a fully managed nftables ruleset, and optional Debian/Ubuntu WARP.
 
-Requirements
-------------
+## Supported platforms
 
-Any pre-requisites that may not be covered by Ansible itself or the role should be mentioned here. For instance, if the role uses the EC2 module, it may be a good idea to mention in this section that the boto package is required.
+- Debian 12/13 and Ubuntu 22.04/24.04
+- RHEL, Rocky Linux, and AlmaLinux 9
 
-Role Variables
---------------
+WARP is intentionally limited to Debian-family hosts because the external
+`warp_native` role does not support EL.
 
-A description of the settable variables for this role should go here, including any variables that are in defaults/main.yml, vars/main.yml, and any variables that can/should be set via parameters to the role. Any variables that are read from other roles and/or the global scope (ie. hostvars, group vars, etc.) should be mentioned here as well.
+## Required inventory values
 
-Dependencies
-------------
+`main_domain`, `sub_mask`, `sub_count`, `pp_map`, `rw_endpoint`, `rw_token`,
+`rw_config_uuid`, `cf_token`, and `cf_zone_id`. `panel_control_port` defaults to
+`2222`; `panel_control_ip` may be one IPv4/IPv6 address or a list.
 
-A list of other roles hosted on Galaxy should go here, plus any details in regards to parameters that may need to be set for other roles, or variables that are used from other roles.
+## Important defaults
 
-Example Playbook
-----------------
+- `nginx_image: nginx:alpine`
+- `remnanode_image: remnawave/node:latest`
+- `docker_pull_policy: always`
+- `templates_repo_version: main`
+- `fake_site_force_regenerate: false`
+- `firewall_whitelist_path: "{{ playbook_dir }}/whitelist.nft"`
 
-Including an example of how to use your role (for instance, with variables passed in as parameters) is always nice for users too:
+The role leaves `make_certs.yml` unchanged. Remnanode secrets are written to
+`/opt/remnanode/.env` with mode `0600`; API and WARP credentials are redacted from
+Ansible output.
 
-    - hosts: servers
-      roles:
-         - { role: username.rolename, x: 42 }
-
-License
--------
-
-BSD
-
-Author Information
-------------------
-
-An optional section for the role authors to include contact information, or a website (HTML is not allowed).
+`force_reinstall` performs a controlled Remnanode secret rotation and container
+recreate while synchronizing the already matching panel node. It is not a
+"create another node" switch. The `dns`, `config`, and `nginx` tags include the
+derived-address/subdomain work they need; run `repo` once before the first nginx
+start so the Compose project and fake site exist.

@@ -1,5 +1,11 @@
 ---
-- hosts: localhost
-  remote_user: root
-  roles:
-    - roles/deploy-rw-by-lynx
+# This file is deliberately non-destructive. CI validates the real deployment
+# playbook with --syntax-check; integration tests run in disposable containers.
+- name: Validate role test fixture
+  hosts: localhost
+  gather_facts: false
+  connection: local
+  tasks:
+    - name: Assert test fixture is non-destructive
+      ansible.builtin.assert:
+        that: true

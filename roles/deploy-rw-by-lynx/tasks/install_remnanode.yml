@@ -1,104 +1,261 @@
-- name: Check if Remnanode is already installed
-  stat:
-    path: /opt/remnanode/docker-compose.yml
-  register: remnanode_stat
+---
+- name: Assert Remnawave v3 deployment inputs
+  ansible.builtin.assert:
+    that:
+      - rw_endpoint is defined
+      - rw_endpoint is match('^https?://')
+      - rw_token is defined
+      - rw_token | length > 0
+      - rw_config_uuid is defined
+      - rw_config_uuid | length > 0
+    fail_msg: rw_endpoint, rw_token, and rw_config_uuid are required for Remnawave v3 deployment.
+  no_log: true
 
-- name: Remnanode Installation and Startup Block
-  when: not remnanode_stat.stat.exists or (force_reinstall | default(false) | bool)
-  block:
-    - name: Create /opt/remnanode directory
-      file:
-        path: /opt/remnanode
-        state: directory
-        mode: '0755'
+- name: Create Remnanode project directory
+  ansible.builtin.file:
+    path: /opt/remnanode
+    state: directory
+    mode: '0755'
 
-    - name: Get pubKey from API
-      uri:
-        url: "{{ rw_endpoint }}/api/keygen"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ rw_token }}"
-        return_content: true
-      register: keygen_response
+- name: Ensure shared Remnanode socket volume exists
+  community.docker.docker_volume:
+    name: rw_node_sockets
+    state: present
 
-    - name: Set pub_key fact
-      set_fact:
-        pub_key: "{{ keygen_response.json.response.pubKey }}"
+- name: Fetch inbounds for config profile
+  ansible.builtin.uri:
+    url: "{{ rw_endpoint }}/api/config-profiles/{{ rw_config_uuid }}/inbounds"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rw_token }}"
+    return_content: true
+    status_code: [200]
+  register: inbounds_response
+  changed_when: false
+  no_log: true
 
-    - name: Fetch inbounds for config profile
-      uri:
-        url: "{{ rw_endpoint }}/api/config-profiles/{{ rw_config_uuid }}/inbounds"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ rw_token }}"
-        return_content: true
-      register: inbounds_response
+- name: Validate Remnawave inbounds response
+  ansible.builtin.assert:
+    that:
+      - inbounds_response.json.response.inbounds is defined
+      - inbounds_response.json.response.inbounds is sequence
+    fail_msg: Remnawave did not return a valid v3 inbounds response.
+  no_log: true
 
-    - name: Build activeInbounds UUID list
-      set_fact:
-        rw_active_inbounds: >-
-          {{
-            inbounds_response.json.response.inbounds
-            | selectattr('tag', 'in', rw_inbounds | default([]))
-            | map(attribute='uuid')
-            | list
-            if (rw_inbounds | default([]) | length > 0)
-            else (inbounds_response.json.response.inbounds | map(attribute='uuid') | list)
-          }}
+- name: Build active inbounds UUID list
+  ansible.builtin.set_fact:
+    rw_active_inbounds: >-
+      {{ inbounds_response.json.response.inbounds
+         | selectattr('tag', 'in', rw_inbounds | default([]))
+         | map(attribute='uuid') | list
+         if (rw_inbounds | default([]) | length > 0)
+         else (inbounds_response.json.response.inbounds | map(attribute='uuid') | list) }}
+  no_log: true
 
-    - name: Generate docker-compose.yml
-      template:
-        src: docker-compose.yml.j2
-        dest: /opt/remnanode/docker-compose.yml
-        mode: '0644'
+- name: Fetch existing Remnawave nodes
+  ansible.builtin.uri:
+    url: "{{ rw_endpoint }}/api/nodes"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rw_token }}"
+    return_content: true
+    status_code: [200]
+  register: nodes_response
+  changed_when: false
+  no_log: true
 
-    - name: Fetch existing nodes
-      uri:
-        url: "{{ rw_endpoint }}/api/nodes"
-        method: GET
-        headers:
-          Authorization: "Bearer {{ rw_token }}"
-        return_content: true
-      register: nodes_response
+- name: Validate Remnawave nodes response
+  ansible.builtin.assert:
+    that: nodes_response.json.response is sequence
+    fail_msg: Remnawave did not return a valid v3 nodes response.
+  no_log: true
 
-    - name: Check if node already registered
-      set_fact:
-        node_already_exists: >-
-          {{
-            nodes_response.json.response
-            | selectattr('name', 'equalto', inventory_hostname)
-            | list | length > 0
-          }}
+- name: Select node records matching this host
+  ansible.builtin.set_fact:
+    matching_remnanodes: >-
+      {{ nodes_response.json.response
+         | selectattr('name', 'equalto', inventory_hostname) | list }}
+  no_log: true
 
-    - name: Register node via API
-      uri:
-        url: "{{ rw_endpoint }}/api/nodes"
-        method: POST
-        headers:
-          Content-Type: application/json
-          Authorization: "Bearer {{ rw_token }}"
-        body_format: json
-        body:
-          name: "{{ inventory_hostname }}"
-          address: "{{ ansible_host }}"
-          port: "{{ panel_control_port | int }}"
-          isTrafficTrackingActive: false
-          trafficLimitBytes: 0
-          notifyPercent: 0
-          trafficResetDay: 1
-          countryCode: "XX"
-          consumptionMultiplier: 0
-          configProfile:
-            activeConfigProfileUuid: "{{ rw_config_uuid }}"
-            activeInbounds: "{{ rw_active_inbounds }}"
-          providerUuid: null
-          tags: []
-          activePluginUuid: null
-        status_code: [200, 201]
-      register: node_response
-      when: not node_already_exists
+- name: Reject duplicate Remnawave node records
+  ansible.builtin.assert:
+    that: matching_remnanodes | length <= 1
+    fail_msg: "Remnawave contains multiple nodes named {{ inventory_hostname }}. Resolve the duplicate manually."
+  no_log: true
 
-    - name: Start Remnanode containers
-      community.docker.docker_compose_v2:
-        project_src: /opt/remnanode
-        state: present
+- name: Set existing Remnawave node fact
+  ansible.builtin.set_fact:
+    remnanode_existing: "{{ matching_remnanodes | first | default({}) }}"
+    remnanode_exists: "{{ matching_remnanodes | length == 1 }}"
+  no_log: true
+
+- name: Check existing Remnanode secret file
+  ansible.builtin.stat:
+    path: /opt/remnanode/.env
+  register: remnanode_env_stat
+  no_log: true
+
+- name: Read existing Remnanode secret file
+  ansible.builtin.slurp:
+    src: /opt/remnanode/.env
+  register: remnanode_env
+  when: remnanode_env_stat.stat.exists and not (force_reinstall | default(false) | bool)
+  no_log: true
+
+- name: Reuse managed Remnanode secret
+  ansible.builtin.set_fact:
+    remnanode_secret_key: >-
+      {{ (remnanode_env.content | b64decode
+          | regex_findall('(?m)^SECRET_KEY=([^\\n]+)$') | first) | default('') }}
+  when: remnanode_env_stat.stat.exists and not (force_reinstall | default(false) | bool)
+  no_log: true
+
+- name: Generate a new Remnawave v3 node secret
+  ansible.builtin.uri:
+    url: "{{ rw_endpoint }}/api/keygen"
+    method: GET
+    headers:
+      Authorization: "Bearer {{ rw_token }}"
+    return_content: true
+    status_code: [200]
+  register: keygen_response
+  when: remnanode_secret_key | default('') | length == 0 or (force_reinstall | default(false) | bool)
+  changed_when: false
+  no_log: true
+
+- name: Validate generated Remnawave v3 secret
+  ansible.builtin.assert:
+    that:
+      - keygen_response.json.response.secretKey is defined
+      - keygen_response.json.response.secretKey | length > 0
+    fail_msg: Remnawave API is not compatible with v3 secretKey response.
+  when: keygen_response is not skipped
+  no_log: true
+
+- name: Set generated Remnanode secret
+  ansible.builtin.set_fact:
+    remnanode_secret_key: "{{ keygen_response.json.response.secretKey }}"
+  when: keygen_response is not skipped
+  no_log: true
+
+- name: Write protected Remnanode environment file
+  ansible.builtin.copy:
+    dest: /opt/remnanode/.env
+    mode: '0600'
+    content: |
+      NODE_PORT={{ panel_control_port | int }}
+      SECRET_KEY={{ remnanode_secret_key }}
+  register: remnanode_env_write
+  no_log: true
+
+- name: Render Remnanode Docker Compose project
+  ansible.builtin.template:
+    src: docker-compose.yml.j2
+    dest: /opt/remnanode/docker-compose.yml
+    mode: '0644'
+  register: remnanode_compose_write
+
+- name: Create Remnawave node when absent
+  ansible.builtin.uri:
+    url: "{{ rw_endpoint }}/api/nodes"
+    method: POST
+    headers:
+      Content-Type: application/json
+      Authorization: "Bearer {{ rw_token }}"
+    body_format: json
+    body:
+      name: "{{ inventory_hostname }}"
+      address: "{{ ansible_host | default(inventory_hostname) }}"
+      port: "{{ panel_control_port | int }}"
+      isTrafficTrackingActive: false
+      trafficLimitBytes: 0
+      notifyPercent: 0
+      trafficResetDay: 1
+      countryCode: XX
+      consumptionMultiplier: 0
+      configProfile:
+        activeConfigProfileUuid: "{{ rw_config_uuid }}"
+        activeInbounds: "{{ rw_active_inbounds }}"
+      providerUuid: null
+      tags: []
+      activePluginUuid: null
+    status_code: [201]
+  when: not remnanode_exists | bool
+  register: remnanode_create
+  changed_when: true
+  failed_when: not (remnanode_create.json.success | default(false) | bool)
+  no_log: true
+
+- name: Determine whether existing Remnawave node needs synchronization
+  ansible.builtin.set_fact:
+    remnanode_needs_update: >-
+      {{ remnanode_exists | bool and
+         ((force_reinstall | default(false) | bool)
+          or remnanode_existing.address | default('') != (ansible_host | default(inventory_hostname))
+          or remnanode_existing.port | default(0) | int != panel_control_port | int
+          or remnanode_existing.configProfile.activeConfigProfileUuid | default('') != rw_config_uuid
+          or remnanode_existing.configProfile.activeInbounds | default([]) | sort != rw_active_inbounds | sort) }}
+  no_log: true
+
+- name: Synchronize existing Remnawave node
+  ansible.builtin.uri:
+    url: "{{ rw_endpoint }}/api/nodes"
+    method: PATCH
+    headers:
+      Content-Type: application/json
+      Authorization: "Bearer {{ rw_token }}"
+    body_format: json
+    body:
+      uuid: "{{ remnanode_existing.uuid }}"
+      name: "{{ inventory_hostname }}"
+      address: "{{ ansible_host | default(inventory_hostname) }}"
+      port: "{{ panel_control_port | int }}"
+      configProfile:
+        activeConfigProfileUuid: "{{ rw_config_uuid }}"
+        activeInbounds: "{{ rw_active_inbounds }}"
+    status_code: [200]
+  when: remnanode_needs_update | bool
+  register: remnanode_update
+  changed_when: true
+  failed_when: not (remnanode_update.json.success | default(false) | bool)
+  no_log: true
+
+- name: Pull and reconcile Remnanode container
+  community.docker.docker_compose_v2:
+    project_src: /opt/remnanode
+    state: present
+    pull: "{{ docker_pull_policy }}"
+    recreate: >-
+      {{ 'always' if (force_reinstall | default(false) | bool
+         or remnanode_env_write.changed or remnanode_compose_write.changed) else 'auto' }}
+  register: remnanode_compose
+
+- name: Record deployed Remnanode image ID
+  ansible.builtin.command:
+    argv: [docker, image, inspect, --format, '{% raw %}{{.Id}}{% endraw %}', "{{ remnanode_image }}"]
+  register: remnanode_image_id
+  changed_when: false
+
+- name: Report deployed Remnanode image ID
+  ansible.builtin.debug:
+    msg: "Remnanode image ID: {{ remnanode_image_id.stdout }}"
+  changed_when: false
+
+- name: Wait for Remnanode control port
+  ansible.builtin.wait_for:
+    host: 127.0.0.1
+    port: "{{ panel_control_port | int }}"
+    timeout: 60
+
+- name: Verify Remnanode container is running
+  ansible.builtin.command:
+    argv: [docker, compose, ps, --status, running, --services]
+  args:
+    chdir: /opt/remnanode
+  register: remnanode_running_services
+  changed_when: false
+
+- name: Require running Remnanode container
+  ansible.builtin.assert:
+    that: "'remnanode' in remnanode_running_services.stdout_lines"
+    fail_msg: Remnanode container did not reach the running state.

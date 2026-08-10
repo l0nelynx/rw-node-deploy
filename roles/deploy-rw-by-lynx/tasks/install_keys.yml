@@ -1,13 +1,52 @@
-- name: Generate service SSH key locally (if it doesn't exist)
+- name: Validate bootstrap credentials
+  ansible.builtin.assert:
+    that:
+      - (root_pass | default('', true) | length > 0) or (master_key | default('', true) | length > 0)
+    fail_msg: Set root_pass or master_key before bootstrapping a host.
   delegate_to: localhost
   become: false
   run_once: true
-  command: ssh-keygen -t ed25519 -f {{ service_key_path }} -N "" -C "ansible-service-key"
+  no_log: true
+
+- name: Generate dedicated service SSH key locally
+  delegate_to: localhost
+  become: false
+  run_once: true
+  ansible.builtin.command:
+    argv:
+      - ssh-keygen
+      - -t
+      - ed25519
+      - -f
+      - "{{ service_key_path | expanduser }}"
+      - -N
+      - ''
+      - -C
+      - ansible-service-key
   args:
-    creates: "{{ service_key_path }}"
+    creates: "{{ service_key_path | expanduser }}"
+
+- name: Verify service key pair exists
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  delegate_to: localhost
+  become: false
+  run_once: true
+  loop:
+    - "{{ service_key_path | expanduser }}"
+    - "{{ service_key_path | expanduser }}.pub"
+  register: service_key_files
+
+- name: Require service key pair
+  ansible.builtin.assert:
+    that: service_key_files.results | map(attribute='stat.exists') | list | min
+    fail_msg: "Service key pair is incomplete at {{ service_key_path | expanduser }}."
+  delegate_to: localhost
+  become: false
+  run_once: true
 
 - name: Install service public key on remote host
   ansible.posix.authorized_key:
     user: root
     state: present
-    key: "{{ lookup('file', service_key_path + '.pub') }}"
+    key: "{{ lookup('ansible.builtin.file', (service_key_path | expanduser) + '.pub') }}"

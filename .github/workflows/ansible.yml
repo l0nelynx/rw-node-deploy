@@ -1,0 +1,65 @@
+name: Ansible validation
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install Ansible tooling
+        run: pip install ansible-core==2.16.* ansible-lint
+      - name: Install role and collection dependencies
+        run: |
+          ansible-galaxy role install -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Lint playbooks and role
+        run: >-
+          ansible-lint --exclude roles/deploy-rw-by-lynx/tasks/make_certs.yml
+          deploy.yml roles/deploy-rw-by-lynx
+      - name: Validate syntax
+        run: ansible-playbook -i inventory_example.ini deploy.yml --syntax-check
+
+  syntax-on-supported-platforms:
+    runs-on: ubuntu-latest
+    container: ${{ matrix.image }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-22.04
+            image: ubuntu:22.04
+          - name: ubuntu-24.04
+            image: ubuntu:24.04
+          - name: debian-12
+            image: debian:12
+          - name: debian-13
+            image: debian:trixie
+          - name: rocky-9
+            image: rockylinux:9
+          - name: alma-9
+            image: almalinux:9
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Ansible tooling
+        shell: bash
+        run: |
+          if [ -f /etc/debian_version ]; then
+            apt-get update
+            DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip git
+            python3 -m pip install --break-system-packages ansible-core==2.16.*
+          else
+            dnf -y install python3-pip git
+            python3 -m pip install ansible-core==2.16.*
+          fi
+      - name: Install role and collection dependencies
+        run: |
+          ansible-galaxy role install --force -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Validate syntax on ${{ matrix.name }}
+        run: ansible-playbook -i inventory_example.ini deploy.yml --syntax-check

@@ -8,5 +8,6 @@ lynx
 hosts
 nginx_quick.sh
 whitelist.nft
+/warp_plus.json
 /.idea/
 roles/warp_native/

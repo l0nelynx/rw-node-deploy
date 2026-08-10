@@ -1,0 +1,42 @@
+    chain prerouting {
+        type filter hook prerouting priority -150; policy accept;
+{% if (whitelist_v4_check | default({'rc': 1})).rc == 0 %}
+        ip saddr @whitelist_v4 accept
+{% endif %}
+{% if (whitelist_v6_check | default({'rc': 1})).rc == 0 %}
+        ip6 saddr @whitelist_v6 accept
+{% endif %}
+        ip saddr @blacklist_v4 counter drop
+        ip6 saddr @blacklist_v6 counter drop
+    }
+
+    chain input {
+        type filter hook input priority 0; policy drop;
+        ct state established,related accept
+        ct state invalid drop
+        iif lo accept
+        tcp dport {{ ansible_port | default(22) | int }} accept
+{% if firewall_panel_ipv4 | length > 0 %}
+        ip saddr { {{ firewall_panel_ipv4 | join(', ') }} } tcp dport {{ panel_control_port | int }} accept
+{% endif %}
+{% if firewall_panel_ipv6 | length > 0 %}
+        ip6 saddr { {{ firewall_panel_ipv6 | join(', ') }} } tcp dport {{ panel_control_port | int }} accept
+{% endif %}
+        udp sport 2408 accept
+{% if firewall_public_tcp_ports | length > 0 %}
+        tcp dport { {{ firewall_public_tcp_ports | map('string') | join(', ') }} } accept
+{% endif %}
+{% if firewall_public_udp_ports | length > 0 %}
+        udp dport { {{ firewall_public_udp_ports | map('string') | join(', ') }} } accept
+{% endif %}
+        icmp type echo-request accept
+        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, nd-router-solicit } accept
+    }
+
+    chain forward {
+        type filter hook forward priority 0; policy accept;
+    }
+
+    chain output {
+        type filter hook output priority 0; policy accept;
+    }

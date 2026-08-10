@@ -1,0 +1,79 @@
+---
+- name: Look up Cloudflare A record
+  ansible.builtin.uri:
+    url: >-
+      https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records?type=A&name={{ cf_dns_name | urlencode }}
+    method: GET
+    headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Content-Type: application/json
+    return_content: true
+    status_code: [200]
+  delegate_to: localhost
+  become: false
+  register: cf_record_lookup
+  changed_when: false
+  failed_when: not (cf_record_lookup.json.success | default(false) | bool)
+  no_log: true
+
+- name: Reject duplicate Cloudflare A records
+  ansible.builtin.assert:
+    that: cf_record_lookup.json.result | length <= 1
+    fail_msg: "Cloudflare has multiple A records for {{ cf_dns_name }}; resolve them manually before deploying."
+  no_log: true
+
+- name: Set Cloudflare record fact
+  ansible.builtin.set_fact:
+    cf_existing_record: "{{ cf_record_lookup.json.result | first | default({}) }}"
+  no_log: true
+
+- name: Create missing Cloudflare A record
+  ansible.builtin.uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
+    method: POST
+    headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: A
+      name: "{{ cf_dns_name }}"
+      content: "{{ current_ip }}"
+      ttl: "{{ cf_dns_ttl | int }}"
+      proxied: "{{ cf_dns_proxied | bool }}"
+    status_code: [200, 201]
+  delegate_to: localhost
+  become: false
+  register: cf_record_create
+  when: cf_record_lookup.json.result | length == 0
+  changed_when: true
+  failed_when: not (cf_record_create.json.success | default(false) | bool)
+  no_log: true
+
+- name: Update stale Cloudflare A record
+  ansible.builtin.uri:
+    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records/{{ cf_existing_record.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ cf_token }}"
+      Content-Type: application/json
+    body_format: json
+    body:
+      type: A
+      name: "{{ cf_dns_name }}"
+      content: "{{ current_ip }}"
+      ttl: "{{ cf_dns_ttl | int }}"
+      proxied: "{{ cf_dns_proxied | bool }}"
+    status_code: [200]
+  delegate_to: localhost
+  become: false
+  register: cf_record_update
+  when:
+    - cf_record_lookup.json.result | length == 1
+    - >-
+      cf_existing_record.content != current_ip
+      or cf_existing_record.ttl | int != cf_dns_ttl | int
+      or cf_existing_record.proxied | bool != cf_dns_proxied | bool
+  changed_when: true
+  failed_when: not (cf_record_update.json.success | default(false) | bool)
+  no_log: true

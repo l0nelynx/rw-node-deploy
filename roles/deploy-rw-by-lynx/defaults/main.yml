@@ -1,10 +1,31 @@
 ---
 install_warp: false
-# warp_plus: ""   # set per-host in inventory to activate WARP+
+
+# Core deployment settings
+target_dir: /opt/nginx
+templates_repo_url: https://github.com/Mrvibecodic/node-templates
+templates_repo_version: main
+nginx_image: nginx:alpine
+remnanode_image: remnawave/node:latest
+docker_pull_policy: always
+fake_site_force_regenerate: false
+service_key_path: "~/.ssh/id_ed25519_rw_deploy"
+
+# Networking and DNS
+reality_domain: "{{ sub_mask }}.{{ main_domain }}"
+cf_dns_ttl: 1
+cf_dns_proxied: false
+firewall_public_tcp_ports: [443, 8443]
+firewall_public_udp_ports: [443, 8443]
+firewall_blacklist_urls:
+  v4: https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v4.nft
+  v6: https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
+firewall_whitelist_path: "{{ playbook_dir }}/whitelist.nft"
 
 # WARP watchdog: как часто (в минутах) проверять свежесть handshake интерфейса warp.
 # Переопределяется в inventory (per-host или в [all:vars]).
 warp_watchdog: 10
+warp_watchdog_enabled: "{{ install_warp | bool }}"
 
 # Панель управления (SSH/API ноды): порт открывается ТОЛЬКО для panel_control_ip.
 # panel_control_port — порт (по умолчанию 2222, как было захардкожено ранее).

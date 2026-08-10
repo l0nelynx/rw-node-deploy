@@ -1,102 +1,140 @@
-# ── WARP watchdog ─────────────────────────────────────────────
-# Раз в {{ warp_watchdog }} мин проверяет свежесть WireGuard-handshake на
-# интерфейсе warp и перезапускает wg-quick@warp, если туннель «завис».
-# Доставляется systemd-таймером (произвольный интервал в минутах, в отличие от cron */N).
+---
+- name: Validate WARP watchdog interval
+  ansible.builtin.assert:
+    that: warp_watchdog | int >= 1
+    fail_msg: warp_watchdog must be a positive number of minutes.
+  when: warp_watchdog_enabled | bool
 
-- name: Create watchdog directory
-  file:
-    path: /opt/warp-native/logs
-    state: directory
-    mode: '0755'
+- name: Remove WARP watchdog when disabled
+  when: not warp_watchdog_enabled | bool
+  block:
+    - name: Disable WARP watchdog timer
+      ansible.builtin.systemd:
+        name: warp-watchdog.timer
+        state: stopped
+        enabled: false
+      failed_when: false
 
-- name: Deploy watchdog config
-  copy:
-    dest: /opt/warp-native/config.env
-    mode: '0644'
-    force: false
-    content: |
-      HANDSHAKE_THRESHOLD=180
-      RESTART_COOLDOWN=120
-      LOG_MAX_LINES=1000
+    - name: Remove WARP watchdog unit files
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/systemd/system/warp-watchdog.service
+        - /etc/systemd/system/warp-watchdog.timer
 
-- name: Deploy watchdog script
-  copy:
-    dest: /opt/warp-native/warp-watchdog.sh
-    mode: '0755'
-    content: |
-      #!/bin/bash
-      CONFIG="/opt/warp-native/config.env"
-      LOG="/opt/warp-native/logs/watchdog.log"
-      COOLDOWN_FILE="/opt/warp-native/logs/.last_restart"
-      [[ -f "$CONFIG" ]] && source "$CONFIG"
-      HANDSHAKE_THRESHOLD="${HANDSHAKE_THRESHOLD:-180}"
-      RESTART_COOLDOWN="${RESTART_COOLDOWN:-120}"
-      LOG_MAX_LINES="${LOG_MAX_LINES:-1000}"
-      log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$1] $2" >> "$LOG"; }
-      hs=$(wg show warp latest-handshakes 2>/dev/null | awk '{print $2}')
-      if [[ -z "$hs" || "$hs" -eq 0 ]]; then
-        log "WARN" "No handshake, restarting warp"
-        systemctl restart wg-quick@warp
-        exit 0
-      fi
-      age=$(( $(date +%s) - hs ))
-      if [[ $age -gt $HANDSHAKE_THRESHOLD ]]; then
-        if [[ -f "$COOLDOWN_FILE" ]]; then
-          last=$(cat "$COOLDOWN_FILE"); now=$(date +%s)
-          (( now - last < RESTART_COOLDOWN )) && { log "INFO" "Cooldown active, skip"; exit 0; }
-        fi
-        date +%s > "$COOLDOWN_FILE"
-        systemctl restart wg-quick@warp
-        log "WARN" "Restarted — handshake was ${age}s stale"
-      else
-        log "OK" "Handshake ${age}s ago"
-      fi
-      lines=$(wc -l < "$LOG" 2>/dev/null || echo 0)
-      (( lines > LOG_MAX_LINES )) && tail -n "$LOG_MAX_LINES" "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
+    - name: Reload systemd after watchdog removal
+      ansible.builtin.systemd:
+        daemon_reload: true
 
-- name: Deploy watchdog systemd service
-  copy:
-    dest: /etc/systemd/system/warp-watchdog.service
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=WARP interface watchdog (handshake staleness check)
-      After=network-online.target
+- name: Configure WARP watchdog when enabled
+  when: warp_watchdog_enabled | bool
+  block:
+    - name: Create watchdog directory
+      ansible.builtin.file:
+        path: /opt/warp-native/logs
+        state: directory
+        mode: '0755'
 
-      [Service]
-      Type=oneshot
-      ExecStart=/opt/warp-native/warp-watchdog.sh
-  register: warp_watchdog_service
+    - name: Deploy watchdog config
+      ansible.builtin.copy:
+        dest: /opt/warp-native/config.env
+        mode: '0644'
+        content: |
+          HANDSHAKE_THRESHOLD=180
+          RESTART_COOLDOWN=120
+          LOG_MAX_LINES=1000
 
-- name: Deploy watchdog systemd timer
-  copy:
-    dest: /etc/systemd/system/warp-watchdog.timer
-    mode: '0644'
-    content: |
-      [Unit]
-      Description=Run WARP watchdog every {{ warp_watchdog }} min
+    - name: Deploy watchdog script
+      ansible.builtin.copy:
+        dest: /opt/warp-native/warp-watchdog.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          set -u
+          CONFIG="/opt/warp-native/config.env"
+          LOG="/opt/warp-native/logs/watchdog.log"
+          COOLDOWN_FILE="/opt/warp-native/logs/.last_restart"
+          [[ -f "$CONFIG" ]] && source "$CONFIG"
+          HANDSHAKE_THRESHOLD="${HANDSHAKE_THRESHOLD:-180}"
+          RESTART_COOLDOWN="${RESTART_COOLDOWN:-120}"
+          LOG_MAX_LINES="${LOG_MAX_LINES:-1000}"
+          log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [$1] $2" >> "$LOG"; }
+          trim_log() {
+            local lines
+            lines=$(wc -l < "$LOG" 2>/dev/null || echo 0)
+            (( lines > LOG_MAX_LINES )) && tail -n "$LOG_MAX_LINES" "$LOG" > "${LOG}.tmp" && mv "${LOG}.tmp" "$LOG"
+          }
+          restart_if_allowed() {
+            local now last
+            now=$(date +%s)
+            if [[ -f "$COOLDOWN_FILE" ]]; then
+              last=$(cat "$COOLDOWN_FILE" 2>/dev/null || echo 0)
+              (( now - last < RESTART_COOLDOWN )) && { log "INFO" "Cooldown active, skip"; return; }
+            fi
+            printf '%s\n' "$now" > "$COOLDOWN_FILE"
+            systemctl restart wg-quick@warp
+            log "WARN" "Restarted WARP"
+          }
+          trap trim_log EXIT
+          hs=$(wg show warp latest-handshakes 2>/dev/null | awk '{print $2}')
+          if [[ -z "$hs" || "$hs" -eq 0 ]]; then
+            log "WARN" "No handshake"
+            restart_if_allowed
+            exit 0
+          fi
+          age=$(( $(date +%s) - hs ))
+          if [[ $age -gt $HANDSHAKE_THRESHOLD ]]; then
+            log "WARN" "Handshake was ${age}s stale"
+            restart_if_allowed
+          else
+            log "OK" "Handshake ${age}s ago"
+          fi
 
-      [Timer]
-      OnBootSec=2min
-      OnUnitActiveSec={{ warp_watchdog }}min
-      Persistent=true
+    - name: Deploy watchdog systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/warp-watchdog.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=WARP interface watchdog
+          Wants=network-online.target
+          After=network-online.target wg-quick@warp.service
 
-      [Install]
-      WantedBy=timers.target
-  register: warp_watchdog_timer
+          [Service]
+          Type=oneshot
+          ExecStart=/opt/warp-native/warp-watchdog.sh
+      register: warp_watchdog_service
 
-- name: Remove legacy cron watchdog if present
-  file:
-    path: /etc/cron.d/warp-native
-    state: absent
+    - name: Deploy watchdog systemd timer
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/warp-watchdog.timer
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Run WARP watchdog every {{ warp_watchdog }} min
 
-- name: Reload systemd if units changed
-  systemd:
-    daemon_reload: true
-  when: warp_watchdog_service.changed or warp_watchdog_timer.changed
+          [Timer]
+          OnBootSec=2min
+          OnUnitActiveSec={{ warp_watchdog }}min
+          Persistent=true
 
-- name: Enable and start watchdog timer
-  systemd:
-    name: warp-watchdog.timer
-    state: started
-    enabled: true
+          [Install]
+          WantedBy=timers.target
+      register: warp_watchdog_timer
+
+    - name: Remove legacy cron watchdog
+      ansible.builtin.file:
+        path: /etc/cron.d/warp-native
+        state: absent
+
+    - name: Reload systemd when watchdog units changed
+      ansible.builtin.systemd:
+        daemon_reload: true
+      when: warp_watchdog_service.changed or warp_watchdog_timer.changed
+
+    - name: Enable and start watchdog timer
+      ansible.builtin.systemd:
+        name: warp-watchdog.timer
+        state: "{{ 'restarted' if warp_watchdog_service.changed or warp_watchdog_timer.changed else 'started' }}"
+        enabled: true

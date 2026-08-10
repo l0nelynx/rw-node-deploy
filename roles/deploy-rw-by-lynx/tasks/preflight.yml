@@ -1,0 +1,37 @@
+---
+- name: Assert supported operating system
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.os_family in ['Debian', 'RedHat']
+      - ansible_facts.os_family == 'Debian' or ansible_facts.distribution_major_version | int >= 9
+    fail_msg: >-
+      Supported platforms are Debian/Ubuntu and EL 9-family hosts. This host is
+      {{ ansible_facts.distribution }} {{ ansible_facts.distribution_version }}.
+
+- name: Assert deployment inputs
+  ansible.builtin.assert:
+    that:
+      - main_domain is defined
+      - main_domain is match('^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\\.)+[A-Za-z]{2,63}$')
+      - sub_mask is defined
+      - sub_mask is match('^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$')
+      - sub_count | int >= 1
+      - sub_count | int <= 55000
+      - pp_map | default([]) is sequence
+      - pp_map | default([]) is not string
+      - pp_map | default([]) | length <= sub_count | int
+      - panel_control_port | int >= 1
+      - panel_control_port | int <= 65535
+      - firewall_public_tcp_ports is sequence
+      - firewall_public_tcp_ports is not string
+      - firewall_public_udp_ports is sequence
+      - firewall_public_udp_ports is not string
+      - firewall_public_tcp_ports | map('int') | select('between', 1, 65535) | list | length == firewall_public_tcp_ports | length
+      - firewall_public_udp_ports | map('int') | select('between', 1, 65535) | list | length == firewall_public_udp_ports | length
+    fail_msg: Domain, subdomain, port, sub_count, pp_map, or firewall port values are invalid.
+
+- name: Reject WARP on unsupported operating systems
+  ansible.builtin.assert:
+    that: ansible_facts.os_family == 'Debian'
+    fail_msg: install_warp=true is supported only on Debian/Ubuntu hosts.
+  when: install_warp | bool
