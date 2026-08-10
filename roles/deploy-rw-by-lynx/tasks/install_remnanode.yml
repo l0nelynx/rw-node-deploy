@@ -17,11 +17,6 @@
     state: directory
     mode: '0755'
 
-- name: Ensure shared Remnanode socket volume exists
-  community.docker.docker_volume:
-    name: rw_node_sockets
-    state: present
-
 - name: Fetch inbounds for config profile
   ansible.builtin.uri:
     url: "{{ rw_endpoint }}/api/config-profiles/{{ rw_config_uuid }}/inbounds"

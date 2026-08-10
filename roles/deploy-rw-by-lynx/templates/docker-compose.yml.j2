@@ -9,13 +9,10 @@ services:
       - NET_ADMIN
     restart: always
     volumes:
-      - rw_node_sockets:/dev/shm
+      - /dev/shm:/dev/shm
     ulimits:
       nofile:
         soft: 1048576
         hard: 1048576
     env_file:
       - .env
-volumes:
-  rw_node_sockets:
-    external: true

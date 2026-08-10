@@ -16,11 +16,6 @@
     - "{{ target_dir }}/template-source"
     - "{{ target_dir }}/site-staging"
 
-- name: Ensure shared socket volume exists
-  community.docker.docker_volume:
-    name: rw_node_sockets
-    state: present
-
 - name: Render nginx Docker Compose project
   ansible.builtin.copy:
     dest: "{{ target_dir }}/docker-compose.yml"
@@ -38,7 +33,7 @@
             - ./nginx.conf:/etc/nginx/nginx.conf:ro
             - ./html:/usr/share/nginx/html:ro
             - ./certs:/etc/nginx/certs:ro
-            - rw_node_sockets:/dev/shm
+            - /dev/shm:/dev/shm
           logging:
             driver: json-file
             options:
@@ -50,10 +45,6 @@
               hard: 1048576
           extra_hosts:
             - host.docker.internal:host-gateway
-      volumes:
-        rw_node_sockets:
-          external: true
-
 - name: Select fake-site template
   ansible.builtin.set_fact:
     selected_template: "{{ template | default('esports-stream-template') }}"
