@@ -26,9 +26,15 @@
       - firewall_public_tcp_ports is not string
       - firewall_public_udp_ports is sequence
       - firewall_public_udp_ports is not string
-      - firewall_public_tcp_ports | map('int') | select('between', 1, 65535) | list | length == firewall_public_tcp_ports | length
-      - firewall_public_udp_ports | map('int') | select('between', 1, 65535) | list | length == firewall_public_udp_ports | length
     fail_msg: Domain, subdomain, port, sub_count, pp_map, or firewall port values are invalid.
+
+- name: Assert public firewall port ranges
+  ansible.builtin.assert:
+    that:
+      - item | int >= 1
+      - item | int <= 65535
+    fail_msg: Firewall public ports must be integers in the range 1-65535.
+  loop: "{{ firewall_public_tcp_ports + firewall_public_udp_ports }}"
 
 - name: Reject WARP on unsupported operating systems
   ansible.builtin.assert:
