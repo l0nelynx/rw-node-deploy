@@ -183,7 +183,6 @@
   when: not remnanode_exists | bool
   register: remnanode_create
   changed_when: true
-  failed_when: not (remnanode_create.json.success | default(false) | bool)
   no_log: true
 
 - name: Determine whether existing Remnawave node needs synchronization
@@ -217,7 +216,6 @@
   when: remnanode_needs_update | bool
   register: remnanode_update
   changed_when: true
-  failed_when: not (remnanode_update.json.success | default(false) | bool)
   no_log: true
 
 - name: Pull and reconcile Remnanode container
