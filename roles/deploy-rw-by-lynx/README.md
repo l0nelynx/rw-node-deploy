@@ -21,6 +21,8 @@ WARP is intentionally limited to Debian-family hosts because the external
 
 - `nginx_image: nginx:alpine`
 - `remnanode_image: ghcr.io/legiz-ru/remnanode-smux:latest`
+- `custom_core_url`: URL custom Xray core; written as `CUSTOM_CORE_URL` to
+  `/opt/remnanode/.env` before Remnanode is started
 - `docker_pull_policy: always`
 - `templates_repo_version: main`
 - `fake_site_force_regenerate: false`

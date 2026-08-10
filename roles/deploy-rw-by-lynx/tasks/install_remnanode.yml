@@ -140,6 +140,7 @@
     content: |
       NODE_PORT={{ panel_control_port | int }}
       SECRET_KEY={{ remnanode_secret_key }}
+      CUSTOM_CORE_URL={{ custom_core_url }}
   register: remnanode_env_write
   no_log: true
 
