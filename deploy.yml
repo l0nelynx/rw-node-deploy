@@ -6,20 +6,18 @@
   serial: 1
   any_errors_fatal: true
   vars:
-    service_key_path: "~/.ssh/id_ed25519_rw_deploy"
+    service_key_path: "~/.ssh/id_ed25519"
     # Если root_pass задан — подключаемся по паролю, иначе по мастер-ключу {{master_key}}
-    ansible_password: "{{ root_pass | default(omit, true) }}"
+    ansible_password: "{{ root_pass | default(omit) }}"
     ansible_ssh_private_key_file: >-
       {{
-        (root_pass | default('', true) | length > 0) | ternary(
+        (root_pass is defined) | ternary(
           omit,
-          (master_key | default('') | expanduser) if ((master_key | default('')).startswith('/') or (master_key | default('')).startswith('~'))
-          else (playbook_dir + '/' + (master_key | default('')))
+          (master_key | expanduser) if (master_key.startswith('/') or master_key.startswith('~'))
+          else (playbook_dir + '/' + master_key)
         )
       }}
-    # Trust a host only on its first connection. Subsequent plays use normal
-    # host-key verification from ansible.cfg.
-    ansible_ssh_common_args: '-o StrictHostKeyChecking=accept-new'
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null'
   tasks:
     - ansible.builtin.import_role:
         name: deploy-rw-by-lynx
@@ -33,7 +31,8 @@
   any_errors_fatal: true
   tags: [warp]
   vars:
-    ansible_ssh_private_key_file: "{{ service_key_path | default('~/.ssh/id_ed25519_rw_deploy') | expanduser }}"
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=6'
   pre_tasks:
     - name: Reject WARP on unsupported operating systems
       ansible.builtin.assert:
@@ -78,7 +77,8 @@
   serial: 1
   any_errors_fatal: true
   vars:
-    ansible_ssh_private_key_file: "{{ service_key_path | default('~/.ssh/id_ed25519_rw_deploy') | expanduser }}"
+    ansible_ssh_private_key_file: "~/.ssh/id_ed25519"
+    ansible_ssh_common_args: '-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=6'
 #  vars_prompt:
 #    - name: cf_token
 #      prompt: "Cloudflare API Token"

@@ -9,7 +9,7 @@ nginx_image: nginx:alpine
 remnanode_image: remnawave/node:latest
 docker_pull_policy: always
 fake_site_force_regenerate: false
-service_key_path: "~/.ssh/id_ed25519_rw_deploy"
+service_key_path: "~/.ssh/id_ed25519"
 
 # Networking and DNS
 reality_domain: "{{ sub_mask }}.{{ main_domain }}"

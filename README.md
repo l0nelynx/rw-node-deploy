@@ -152,9 +152,8 @@ on an EL host fails before any WARP changes are made.
 
 ## Security and lifecycle
 
-The bootstrap play uses SSH `accept-new` only for a host's first connection; all
-later plays verify the stored host key. The service key is
-`~/.ssh/id_ed25519_rw_deploy`, separate from the operator's master key.
+The bootstrap and deployment plays use the existing service key
+`~/.ssh/id_ed25519` and retain the previous SSH host-key handling.
 
 Tokens and passwords may remain in the ignored local inventory by design, but they
 are never printed by role tasks. Keep `hosts` and `warp_plus.json` private, rotate
