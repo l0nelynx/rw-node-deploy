@@ -193,7 +193,8 @@
           or remnanode_existing.address | default('') != (ansible_host | default(inventory_hostname))
           or remnanode_existing.port | default(0) | int != panel_control_port | int
           or remnanode_existing.configProfile.activeConfigProfileUuid | default('') != rw_config_uuid
-          or remnanode_existing.configProfile.activeInbounds | default([]) | sort != rw_active_inbounds | sort) }}
+          or remnanode_existing.configProfile.activeInbounds | default([])
+             | map(attribute='uuid') | list | sort != rw_active_inbounds | sort) }}
   no_log: true
 
 - name: Synchronize existing Remnawave node
