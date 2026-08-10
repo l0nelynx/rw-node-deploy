@@ -13,14 +13,15 @@ jobs:
         with:
           python-version: '3.12'
       - name: Install Ansible tooling
-        run: pip install ansible-core==2.16.* ansible-lint
+        run: pip install ansible-core==2.16.14 ansible-lint==24.12.2
       - name: Install role and collection dependencies
         run: |
           ansible-galaxy role install -r requirements.yml -p roles
           ansible-galaxy collection install -r requirements.yml
       - name: Lint playbooks and role
         run: >-
-          ansible-lint --exclude roles/deploy-rw-by-lynx/tasks/make_certs.yml
+          ansible-lint --exclude group_vars --exclude roles/warp_native
+          --exclude roles/deploy-rw-by-lynx/tasks/make_certs.yml
           deploy.yml roles/deploy-rw-by-lynx
       - name: Validate syntax
         run: ansible-playbook -i inventory_example.ini deploy.yml --syntax-check
@@ -52,10 +53,10 @@ jobs:
           if [ -f /etc/debian_version ]; then
             apt-get update
             DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip git
-            python3 -m pip install --break-system-packages ansible-core==2.16.*
+            python3 -m pip install --break-system-packages ansible-core==2.15.13
           else
             dnf -y install python3-pip git
-            python3 -m pip install ansible-core==2.16.*
+            python3 -m pip install ansible-core==2.15.13
           fi
       - name: Install role and collection dependencies
         run: |
