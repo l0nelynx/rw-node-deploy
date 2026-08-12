@@ -1,9 +1,9 @@
     chain prerouting {
         type filter hook prerouting priority -150; policy accept;
-{% if (whitelist_v4_check | default({'rc': 1})).rc == 0 %}
+{% if (whitelist_v4_check.rc | default(1)) == 0 %}
         ip saddr @whitelist_v4 accept
 {% endif %}
-{% if (whitelist_v6_check | default({'rc': 1})).rc == 0 %}
+{% if (whitelist_v6_check.rc | default(1)) == 0 %}
         ip6 saddr @whitelist_v6 accept
 {% endif %}
         ip saddr @blacklist_v4 counter drop

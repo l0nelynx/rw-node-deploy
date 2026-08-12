@@ -105,7 +105,11 @@ These files live in the project root, are **not** committed, and are optional.
 
 If present, its `whitelist_v4` set is loaded before the ASN blacklists and accepted
 first in the `prerouting` chain (whitelisted IPs bypass all blacklist drops). If the
-file is absent, the firewall play runs normally with no whitelist. Format:
+file is absent, the firewall play runs normally with no whitelist. Copy
+`whitelist_example.nft` to `whitelist.nft` and replace its documentation-only
+addresses with private deployment values. Only the example is committed;
+`whitelist.nft` remains gitignored because it may contain exact machine IPs.
+Format:
 
 ```
 table inet filter {

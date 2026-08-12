@@ -38,7 +38,7 @@ provisioner:
         firewall_blacklist_urls:
           v4: file:///opt/rw-test/firewall/blacklist-v4.nft
           v6: file:///opt/rw-test/firewall/blacklist-v6.nft
-        firewall_whitelist_path: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/tests/fixtures/firewall/whitelist.nft"
+        firewall_whitelist_path: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/whitelist_example.nft"
 verifier:
   name: ansible
 scenario:

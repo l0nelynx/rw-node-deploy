@@ -54,7 +54,7 @@ provisioner:
         remnanode_image: rw-test/remnanode:local
         custom_core_url: https://example.test/xray-core
         docker_pull_policy: never
-        firewall_whitelist_path: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/tests/fixtures/firewall/whitelist.nft"
+        firewall_whitelist_path: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/whitelist_example.nft"
 verifier:
   name: ansible
 scenario:
