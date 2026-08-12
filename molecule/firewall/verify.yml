@@ -1,0 +1,193 @@
+---
+- name: Verify firewall scenario
+  hosts: all
+  become: true
+  tasks:
+    - name: Read managed nftables ruleset
+      ansible.builtin.command:
+        argv: [nft, list, ruleset]
+      register: nft_ruleset
+      changed_when: false
+
+    - name: Verify complete ruleset ownership and declared ports
+      ansible.builtin.assert:
+        that:
+          - "'table inet foreign_ci' not in nft_ruleset.stdout"
+          - "'table inet filter' in nft_ruleset.stdout"
+          - "'tcp dport 22022 accept' in nft_ruleset.stdout"
+          - "'tcp dport 2222 accept' in nft_ruleset.stdout"
+          - "'198.51.100.10' in nft_ruleset.stdout"
+          - "'2001:db8:ffff::10' in nft_ruleset.stdout"
+          - "'443' in nft_ruleset.stdout"
+          - "'8443' in nft_ruleset.stdout"
+          - nft_ruleset.stdout.find('@whitelist_v4') >= 0
+          - nft_ruleset.stdout.find('@blacklist_v4') >= 0
+          - nft_ruleset.stdout.find('@whitelist_v4') < nft_ruleset.stdout.find('@blacklist_v4')
+          - nft_ruleset.stdout.find('@whitelist_v6') >= 0
+          - nft_ruleset.stdout.find('@blacklist_v6') >= 0
+          - nft_ruleset.stdout.find('@whitelist_v6') < nft_ruleset.stdout.find('@blacklist_v6')
+
+    - name: Verify firewall cache permissions
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop:
+        - {path: /var/lib/rw-node-firewall, mode: '0700'}
+        - {path: /var/lib/rw-node-firewall/blacklist-v4.nft, mode: '0600'}
+        - {path: /var/lib/rw-node-firewall/blacklist-v6.nft, mode: '0600'}
+        - {path: /var/lib/rw-node-firewall/whitelist.nft.download, mode: '0600'}
+      register: firewall_paths
+
+    - name: Require firewall cache permissions
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == item.item.mode
+      loop: "{{ firewall_paths.results }}"
+
+    - name: Verify Docker daemon survived full ruleset replacement
+      ansible.builtin.command:
+        argv: [docker, info]
+      changed_when: false
+
+    - name: Verify Docker bridge and published-port NAT after restart
+      ansible.builtin.uri:
+        url: http://127.0.0.1:18090/
+        status_code: [200]
+      register: docker_nat_probe
+      until: docker_nat_probe.status == 200
+      retries: 10
+      delay: 1
+
+    - name: Check UFW enabled state on Debian-family targets
+      ansible.builtin.command:
+        argv: [systemctl, is-enabled, ufw.service]
+      when: ansible_facts.os_family == 'Debian'
+      register: ufw_enabled_state
+      changed_when: false
+      failed_when: false
+
+    - name: Require UFW to be disabled on Debian-family targets
+      ansible.builtin.assert:
+        that: ufw_enabled_state.rc != 0
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Functionally test whitelist precedence over blacklist
+      ansible.builtin.shell: |
+        set -euo pipefail
+        SERVER_PID=''
+        PANEL_PID=''
+        SSH_PID=''
+        cleanup() {
+          kill "${SERVER_PID:-}" "${PANEL_PID:-}" "${SSH_PID:-}" 2>/dev/null || true
+          ip netns del rw-firewall-test 2>/dev/null || true
+          ip link del rw-fw-host 2>/dev/null || true
+        }
+        wait_for_listener() {
+          port="$1"
+          pid="$2"
+          log="$3"
+          for _ in $(seq 1 100); do
+            if ss -H -ltn "sport = :$port" | grep . >/dev/null; then
+              return 0
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              cat "$log" >&2
+              return 1
+            fi
+            sleep 0.1
+          done
+          echo "listener on port $port did not start" >&2
+          cat "$log" >&2
+          return 1
+        }
+        trap cleanup EXIT
+        ip netns add rw-firewall-test
+        ip link add rw-fw-host type veth peer name rw-fw-peer
+        ip link set rw-fw-peer netns rw-firewall-test
+        ip address add 198.51.100.1/24 dev rw-fw-host
+        ip link set rw-fw-host up
+        ip netns exec rw-firewall-test ip address add 198.51.100.10/24 dev rw-fw-peer
+        ip netns exec rw-firewall-test ip link set lo up
+        ip netns exec rw-firewall-test ip link set rw-fw-peer up
+        nc -4 -l -k 198.51.100.1 443 >/tmp/rw-firewall-http.log 2>&1 &
+        SERVER_PID=$!
+        nc -4 -l -k 198.51.100.1 2222 >/tmp/rw-firewall-panel.log 2>&1 &
+        PANEL_PID=$!
+        wait_for_listener 443 "$SERVER_PID" /tmp/rw-firewall-http.log
+        wait_for_listener 2222 "$PANEL_PID" /tmp/rw-firewall-panel.log
+        ip netns exec rw-firewall-test nc -z -w 2 198.51.100.1 443 || {
+          echo 'whitelisted IPv4 source could not reach public port' >&2
+          cat /tmp/rw-firewall-http.log >&2
+          nft list ruleset >&2
+          exit 1
+        }
+        ip netns exec rw-firewall-test nc -z -w 2 198.51.100.1 2222 || {
+          echo 'trusted IPv4 source could not reach panel port' >&2
+          cat /tmp/rw-firewall-panel.log >&2
+          nft list ruleset >&2
+          exit 1
+        }
+        ip netns exec rw-firewall-test ip address del 198.51.100.10/24 dev rw-fw-peer
+        ip netns exec rw-firewall-test ip address add 198.51.100.20/24 dev rw-fw-peer
+        if ip netns exec rw-firewall-test nc -z -w 1 198.51.100.1 443; then
+          echo 'blacklisted-only source unexpectedly reached public port' >&2
+          exit 1
+        fi
+        kill "$PANEL_PID"
+        PANEL_PID=''
+        ip netns exec rw-firewall-test ip address del 198.51.100.20/24 dev rw-fw-peer
+        ip address del 198.51.100.1/24 dev rw-fw-host
+        ip address add 192.0.2.1/24 dev rw-fw-host
+        ip netns exec rw-firewall-test ip address add 192.0.2.20/24 dev rw-fw-peer
+        nc -4 -l -k 192.0.2.1 2222 >/tmp/rw-firewall-panel.log 2>&1 &
+        PANEL_PID=$!
+        nc -4 -l -k 192.0.2.1 22022 >/tmp/rw-firewall-ssh.log 2>&1 &
+        SSH_PID=$!
+        wait_for_listener 2222 "$PANEL_PID" /tmp/rw-firewall-panel.log
+        wait_for_listener 22022 "$SSH_PID" /tmp/rw-firewall-ssh.log
+        if ip netns exec rw-firewall-test nc -z -w 1 192.0.2.1 2222; then
+          echo 'untrusted source unexpectedly reached panel port' >&2
+          exit 1
+        fi
+        ip netns exec rw-firewall-test nc -z -w 2 192.0.2.1 22022 || {
+          echo 'custom SSH port was not reachable' >&2
+          cat /tmp/rw-firewall-ssh.log >&2
+          nft list ruleset >&2
+          exit 1
+        }
+
+        kill "$SERVER_PID" "$PANEL_PID" "$SSH_PID"
+        SERVER_PID=''
+        PANEL_PID=''
+        SSH_PID=''
+        ip netns exec rw-firewall-test ip address del 192.0.2.20/24 dev rw-fw-peer
+        ip address del 192.0.2.1/24 dev rw-fw-host
+        ip address add 2001:db8:ffff::1/64 dev rw-fw-host nodad
+        ip netns exec rw-firewall-test ip address add 2001:db8:ffff::10/64 dev rw-fw-peer nodad
+        nc -6 -l -k 2001:db8:ffff::1 443 >/tmp/rw-firewall-http-v6.log 2>&1 &
+        SERVER_PID=$!
+        nc -6 -l -k 2001:db8:ffff::1 2222 >/tmp/rw-firewall-panel-v6.log 2>&1 &
+        PANEL_PID=$!
+        wait_for_listener 443 "$SERVER_PID" /tmp/rw-firewall-http-v6.log
+        wait_for_listener 2222 "$PANEL_PID" /tmp/rw-firewall-panel-v6.log
+        ip netns exec rw-firewall-test nc -6 -z -w 2 2001:db8:ffff::1 443 || {
+          echo 'whitelisted IPv6 source could not reach public port' >&2
+          cat /tmp/rw-firewall-http-v6.log >&2
+          nft list ruleset >&2
+          exit 1
+        }
+        ip netns exec rw-firewall-test nc -6 -z -w 2 2001:db8:ffff::1 2222 || {
+          echo 'trusted IPv6 source could not reach panel port' >&2
+          cat /tmp/rw-firewall-panel-v6.log >&2
+          nft list ruleset >&2
+          exit 1
+        }
+        ip netns exec rw-firewall-test ip address del 2001:db8:ffff::10/64 dev rw-fw-peer
+        ip netns exec rw-firewall-test ip address add 2001:db8:ffff::20/64 dev rw-fw-peer nodad
+        if ip netns exec rw-firewall-test nc -6 -z -w 1 2001:db8:ffff::1 443; then
+          echo 'IPv6 blacklisted-only source unexpectedly reached public port' >&2
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: false

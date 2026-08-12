@@ -1,0 +1,72 @@
+---
+- name: Exercise repeat and invalid firewall updates
+  hosts: all
+  become: true
+  tasks:
+    - name: Reapply valid managed firewall
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: block_asn
+
+    - name: Read baseline firewall checksum
+      ansible.builtin.slurp:
+        src: /opt/rw-test/firewall/first-checksum
+      register: baseline_checksum
+
+    - name: Read checksum after repeat apply
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: repeated_firewall_config
+
+    - name: Require stable rendered firewall configuration
+      ansible.builtin.assert:
+        that: repeated_firewall_config.stat.checksum == (baseline_checksum.content | b64decode | trim)
+
+    - name: Capture live ruleset before invalid update
+      ansible.builtin.command:
+        argv: [nft, list, ruleset]
+      register: rules_before_invalid
+      changed_when: false
+
+    - name: Require invalid blacklist rejection
+      block:
+        - name: Apply invalid blacklist candidate
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: block_asn
+          vars:
+            firewall_blacklist_urls:
+              v4: file:///opt/rw-test/firewall/invalid-blacklist.nft
+              v6: file:///opt/rw-test/firewall/blacklist-v6.nft
+      rescue:
+        - name: Mark invalid blacklist as rejected
+          ansible.builtin.set_fact:
+            invalid_blacklist_rejected: true
+
+        - name: Capture live ruleset after invalid update
+          ansible.builtin.command:
+            argv: [nft, list, ruleset]
+          register: rules_after_invalid
+          changed_when: false
+
+        - name: Verify invalid update preserved live rules
+          ansible.builtin.assert:
+            that: rules_after_invalid.stdout == rules_before_invalid.stdout
+
+    - name: Verify last-known-good blacklist remains
+      ansible.builtin.command:
+        argv: [grep, -q, blacklist_v4, /var/lib/rw-node-firewall/blacklist-v4.nft]
+      changed_when: false
+
+    - name: Read firewall configuration after invalid update
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: config_after_invalid
+
+    - name: Require invalid update to preserve persisted configuration
+      ansible.builtin.assert:
+        that:
+          - invalid_blacklist_rejected | default(false)
+          - config_after_invalid.stat.checksum == (baseline_checksum.content | b64decode | trim)

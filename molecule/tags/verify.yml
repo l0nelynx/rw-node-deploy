@@ -1,0 +1,29 @@
+---
+- name: Verify tag scenario final state
+  hosts: all
+  become: true
+  tasks:
+    - name: Read Remnanode environment after tag update
+      ansible.builtin.slurp:
+        src: /opt/remnanode/.env
+      register: tag_env
+      no_log: true
+
+    - name: Require updated Remnanode port in environment
+      ansible.builtin.assert:
+        that: "'NODE_PORT=2333' in (tag_env.content | b64decode)"
+      no_log: true
+
+    - name: Read final mock API state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: tag_state
+      changed_when: false
+
+    - name: Require API port synchronization
+      ansible.builtin.assert:
+        that:
+          - tag_state.json.nodes | length == 1
+          - tag_state.json.nodes[0].port | int == 2333
+          - tag_state.json.dns_records | length == 3

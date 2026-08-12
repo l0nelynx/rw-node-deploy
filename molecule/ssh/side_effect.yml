@@ -1,0 +1,116 @@
+---
+- name: Exercise SSH idempotence and serial failure
+  hosts: localhost
+  gather_facts: false
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    ssh_test_dir: /tmp/rw-node-molecule-ssh
+  tasks:
+    - name: Repeat bootstrap
+      ansible.builtin.command:
+        argv: [ansible-playbook, -i, "{{ ssh_test_dir }}/inventory.yml", tests/playbooks/bootstrap.yml]
+      args:
+        chdir: "{{ project_dir }}"
+      register: repeated_bootstrap
+      changed_when: false
+
+    - name: Require idempotent repeated bootstrap recap
+      ansible.builtin.assert:
+        that: "'changed=0' in repeated_bootstrap.stdout"
+
+    - name: Remove test known-hosts file
+      ansible.builtin.file:
+        path: "{{ ssh_test_dir }}/known_hosts"
+        state: absent
+
+    - name: Verify connection with empty known_hosts
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - "{{ ssh_test_dir }}/service"
+          - -p
+          - '22222'
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - "UserKnownHostsFile={{ ssh_test_dir }}/known_hosts"
+          - root@127.0.0.1
+          - 'true'
+      changed_when: false
+
+    - name: Remove serial test markers
+      ansible.builtin.command:
+        argv:
+          - ansible
+          - -i
+          - "{{ ssh_test_dir }}/service-inventory.yml"
+          - bootstrap_targets
+          - -m
+          - ansible.builtin.file
+          - -a
+          - path=/tmp/rw-serial-progressed state=absent
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: false
+
+    - name: Run expected serial-stop failure
+      ansible.builtin.command:
+        argv:
+          - ansible-playbook
+          - -i
+          - "{{ ssh_test_dir }}/service-inventory.yml"
+          - tests/playbooks/serial_stop.yml
+      args:
+        chdir: "{{ project_dir }}"
+      register: serial_stop
+      changed_when: false
+      failed_when: serial_stop.rc == 0
+
+    - name: Check second-host serial marker
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - -i
+          - "{{ ssh_test_dir }}/service"
+          - -p
+          - '22223'
+          - -o
+          - StrictHostKeyChecking=no
+          - -o
+          - UserKnownHostsFile=/dev/null
+          - root@127.0.0.1
+          - test ! -e /tmp/rw-serial-progressed
+      register: second_host_marker
+      changed_when: false
+      failed_when: second_host_marker.rc != 0
+
+    - name: Remove service public key to create incomplete pair
+      ansible.builtin.file:
+        path: "{{ ssh_test_dir }}/service.pub"
+        state: absent
+
+    - name: Require incomplete service key pair rejection
+      ansible.builtin.command:
+        argv: [ansible-playbook, -i, "{{ ssh_test_dir }}/inventory.yml", tests/playbooks/bootstrap.yml]
+      args:
+        chdir: "{{ project_dir }}"
+      register: incomplete_key_pair
+      changed_when: false
+      failed_when: incomplete_key_pair.rc == 0
+
+    - name: Require understandable incomplete-key error
+      ansible.builtin.assert:
+        that: "'incomplete' in (incomplete_key_pair.stdout + incomplete_key_pair.stderr) | lower"
+
+    - name: Derive service public key again
+      ansible.builtin.command:
+        argv: [ssh-keygen, -y, -f, "{{ ssh_test_dir }}/service"]
+      register: regenerated_public_key
+      changed_when: false
+
+    - name: Restore service public key fixture
+      ansible.builtin.copy:
+        dest: "{{ ssh_test_dir }}/service.pub"
+        mode: '0644'
+        content: "{{ regenerated_public_key.stdout }}\n"

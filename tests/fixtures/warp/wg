@@ -1,0 +1,5 @@
+#!/bin/sh
+set -eu
+if [ -f /tmp/rw-test-wg-handshake ]; then
+  printf 'peer %s\n' "$(cat /tmp/rw-test-wg-handshake)"
+fi

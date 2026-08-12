@@ -1,0 +1,55 @@
+---
+dependency:
+  name: galaxy
+  options:
+    role-file: requirements.yml
+    requirements-file: requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: ssh-password
+    image: ubuntu:24.04
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    tty: true
+    cgroupns_mode: host
+    env:
+      container: docker
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs: [/run, /run/lock]
+    published_ports:
+      - 127.0.0.1:22222:22/tcp
+  - name: ssh-master
+    image: ubuntu:24.04
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    tty: true
+    cgroupns_mode: host
+    env:
+      container: docker
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs: [/run, /run/lock]
+    published_ports:
+      - 127.0.0.1:22223:22/tcp
+provisioner:
+  name: ansible
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - cleanup
+    - destroy

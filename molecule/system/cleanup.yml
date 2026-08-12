@@ -1,0 +1,8 @@
+---
+- name: Cleanup system scenario resources
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Keep cleanup phase explicit
+      ansible.builtin.debug:
+        msg: Molecule Docker destroy removes all isolated system fixtures.

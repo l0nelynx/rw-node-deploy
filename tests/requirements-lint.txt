@@ -1,0 +1,4 @@
+-c constraints-lint.txt
+ansible-core
+ansible-lint
+yamllint

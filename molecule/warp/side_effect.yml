@@ -1,0 +1,226 @@
+---
+- name: Exercise WARP endpoint and watchdog failure branches
+  hosts: all
+  become: true
+  tasks:
+    - name: Capture WARP service timestamp before stable endpoint run
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, wg-quick@warp.service]
+      register: warp_timestamp_before
+      changed_when: false
+
+    - name: Reconcile already-correct WARP endpoint
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_endpoint
+
+    - name: Capture WARP service timestamp after stable endpoint run
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, wg-quick@warp.service]
+      register: warp_timestamp_after
+      changed_when: false
+
+    - name: Require no restart for stable endpoint
+      ansible.builtin.assert:
+        that: warp_timestamp_before.stdout == warp_timestamp_after.stdout
+
+    - name: Set fresh WARP handshake
+      ansible.builtin.shell: date +%s > /tmp/rw-test-wg-handshake
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Run watchdog with fresh handshake
+      ansible.builtin.command:
+        argv: [/opt/warp-native/warp-watchdog.sh]
+      changed_when: false
+
+    - name: Remove watchdog cooldown before stale test
+      ansible.builtin.file:
+        path: /opt/warp-native/logs/.last_restart
+        state: absent
+
+    - name: Set stale WARP handshake
+      ansible.builtin.copy:
+        dest: /tmp/rw-test-wg-handshake
+        mode: '0600'
+        content: "1\n"
+
+    - name: Run watchdog with stale handshake
+      ansible.builtin.command:
+        argv: [/opt/warp-native/warp-watchdog.sh]
+      changed_when: false
+
+    - name: Capture service timestamp after stale restart
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, wg-quick@warp.service]
+      register: stale_restart_timestamp
+      changed_when: false
+
+    - name: Run watchdog again during cooldown
+      ansible.builtin.command:
+        argv: [/opt/warp-native/warp-watchdog.sh]
+      changed_when: false
+
+    - name: Capture service timestamp during cooldown
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, wg-quick@warp.service]
+      register: cooldown_timestamp
+      changed_when: false
+
+    - name: Require cooldown to suppress repeated restart
+      ansible.builtin.assert:
+        that: stale_restart_timestamp.stdout == cooldown_timestamp.stdout
+
+    - name: Remove handshake and cooldown for missing-handshake branch
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /tmp/rw-test-wg-handshake
+        - /opt/warp-native/logs/.last_restart
+
+    - name: Separate missing-handshake restart timestamp
+      ansible.builtin.pause:
+        seconds: 1
+
+    - name: Capture service timestamp before missing handshake
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, wg-quick@warp.service]
+      register: missing_handshake_before
+      changed_when: false
+
+    - name: Seed oversized watchdog log
+      ansible.builtin.shell: for i in $(seq 1 1100); do echo fixture; done > /opt/warp-native/logs/watchdog.log
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Run watchdog to rotate log
+      ansible.builtin.command:
+        argv: [/opt/warp-native/warp-watchdog.sh]
+      changed_when: false
+
+    - name: Capture service timestamp after missing handshake
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, wg-quick@warp.service]
+      register: missing_handshake_after
+      changed_when: false
+
+    - name: Require missing handshake to restart WARP
+      ansible.builtin.assert:
+        that: missing_handshake_before.stdout != missing_handshake_after.stdout
+
+    - name: Count rotated watchdog log lines
+      ansible.builtin.command:
+        argv: [wc, -l, /opt/warp-native/logs/watchdog.log]
+      register: watchdog_log_lines
+      changed_when: false
+
+    - name: Require bounded watchdog log
+      ansible.builtin.assert:
+        that: watchdog_log_lines.stdout.split()[0] | int <= 1000
+
+    - name: Capture watchdog timer timestamp before interval change
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, warp-watchdog.timer]
+      register: watchdog_timer_before
+      changed_when: false
+
+    - name: Separate watchdog timer restart timestamps
+      ansible.builtin.pause:
+        seconds: 1
+
+    - name: Change WARP watchdog interval
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_watchdog
+      vars:
+        warp_watchdog: 2
+        warp_watchdog_enabled: true
+
+    - name: Capture watchdog timer timestamp after interval change
+      ansible.builtin.command:
+        argv: [systemctl, show, -p, ActiveEnterTimestampMonotonic, --value, warp-watchdog.timer]
+      register: watchdog_timer_after
+      changed_when: false
+
+    - name: Read changed watchdog timer unit
+      ansible.builtin.slurp:
+        src: /etc/systemd/system/warp-watchdog.timer
+      register: watchdog_timer_unit
+
+    - name: Verify watchdog timer interval and restart
+      ansible.builtin.assert:
+        that:
+          - watchdog_timer_before.stdout != watchdog_timer_after.stdout
+          - "'OnUnitActiveSec=2min' in (watchdog_timer_unit.content | b64decode)"
+
+    - name: Require invalid watchdog interval rejection
+      block:
+        - name: Attempt zero watchdog interval
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: warp_watchdog
+          vars:
+            warp_watchdog: 0
+            warp_watchdog_enabled: true
+      rescue:
+        - name: Mark invalid watchdog interval as rejected
+          ansible.builtin.set_fact:
+            invalid_watchdog_rejected: true
+
+    - name: Require expected watchdog interval rejection
+      ansible.builtin.assert:
+        that: invalid_watchdog_rejected | default(false)
+
+    - name: Disable WARP watchdog
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_watchdog
+      vars:
+        warp_watchdog_enabled: false
+
+    - name: Check removed watchdog units
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /etc/systemd/system/warp-watchdog.service
+        - /etc/systemd/system/warp-watchdog.timer
+      register: removed_watchdog_units
+
+    - name: Require disabled watchdog units to be absent
+      ansible.builtin.assert:
+        that: not item.stat.exists
+      loop: "{{ removed_watchdog_units.results }}"
+
+    - name: Verify RHEL WARP preflight rejection
+      block:
+        - name: Save real operating-system facts
+          ansible.builtin.set_fact:
+            real_os_facts: "{{ ansible_facts }}"
+
+        - name: Inject RHEL facts for preflight contract
+          ansible.builtin.set_fact:
+            ansible_facts:
+              os_family: RedHat
+              distribution: Rocky
+              distribution_major_version: '9'
+              distribution_version: '9.0'
+
+        - name: Attempt unsupported RHEL WARP preflight
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: preflight
+      rescue:
+        - name: Mark expected RHEL rejection
+          ansible.builtin.set_fact:
+            rhel_warp_rejected: true
+      always:
+        - name: Restore real operating-system facts
+          ansible.builtin.set_fact:
+            ansible_facts: "{{ real_os_facts }}"
+
+    - name: Require expected RHEL rejection
+      ansible.builtin.assert:
+        that: rhel_warp_rejected | default(false)

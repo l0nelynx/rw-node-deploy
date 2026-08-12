@@ -1,0 +1,38 @@
+---
+- name: Run SSH bootstrap through real SSH transport
+  hosts: localhost
+  gather_facts: false
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+    ssh_test_dir: /tmp/rw-node-molecule-ssh
+  tasks:
+    - name: Execute verbose SSH bootstrap without leaking password
+      ansible.builtin.shell: |
+        set -o pipefail
+        ansible-playbook -i "{{ ssh_test_dir }}/inventory.yml" tests/playbooks/bootstrap.yml -vvv \
+          > "{{ ssh_test_dir }}/bootstrap.log" 2>&1
+      args:
+        chdir: "{{ project_dir }}"
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Search verbose output for password sentinel
+      ansible.builtin.command:
+        argv: [grep, -F, ROOT_PASSWORD_SENTINEL_DO_NOT_LOG, "{{ ssh_test_dir }}/bootstrap.log"]
+      register: password_leak
+      changed_when: false
+      failed_when: password_leak.rc == 0
+      no_log: true
+
+    - name: Verify service-key SSH access to both targets
+      ansible.builtin.command:
+        argv:
+          - ansible
+          - -i
+          - "{{ ssh_test_dir }}/service-inventory.yml"
+          - bootstrap_targets
+          - -m
+          - ansible.builtin.ping
+      args:
+        chdir: "{{ project_dir }}"
+      changed_when: false

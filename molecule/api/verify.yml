@@ -1,0 +1,27 @@
+---
+- name: Verify API scenario final state
+  hosts: all
+  become: true
+  tasks:
+    - name: Verify protected Remnanode environment permissions
+      ansible.builtin.stat:
+        path: /opt/remnanode/.env
+      register: remnanode_env
+
+    - name: Require protected environment mode
+      ansible.builtin.assert:
+        that:
+          - remnanode_env.stat.exists
+          - remnanode_env.stat.mode == '0600'
+
+    - name: Ensure compose does not contain secrets
+      ansible.builtin.slurp:
+        src: /opt/remnanode/docker-compose.yml
+      register: compose_content
+
+    - name: Require compose secret separation
+      ansible.builtin.assert:
+        that:
+          - "'SECRET_KEY=' not in (compose_content.content | b64decode)"
+          - "'RW_API_SENTINEL_DO_NOT_LOG' not in (compose_content.content | b64decode)"
+          - "'CF_API_SENTINEL_DO_NOT_LOG' not in (compose_content.content | b64decode)"

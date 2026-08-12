@@ -1,70 +1,271 @@
+---
 name: Ansible validation
 
 on:
   push:
   pull_request:
 
+concurrency:
+  group: ansible-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ANSIBLE_FORCE_COLOR: '1'
+  ANSIBLE_ROLES_PATH: roles
+  PY_COLORS: '1'
+
 jobs:
-  lint:
+  static:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Install Ansible tooling
-        run: pip install ansible-core==2.16.14 ansible-lint==24.12.2
-      - name: Install role and collection dependencies
-        run: |
-          ansible-galaxy role install -r requirements.yml -p roles
-          ansible-galaxy collection install -r requirements.yml
-      - name: Lint playbooks and role
-        run: >-
-          ansible-lint --exclude group_vars --exclude roles/warp_native
-          --exclude roles/deploy-rw-by-lynx/tasks/make_certs.yml
-          deploy.yml roles/deploy-rw-by-lynx
-      - name: Validate syntax
-        run: ansible-playbook -i inventory_example.ini deploy.yml --syntax-check
-
-  syntax-on-supported-platforms:
-    runs-on: ubuntu-latest
-    container: ${{ matrix.image }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - name: ubuntu-22.04
-            image: ubuntu:22.04
-          - name: ubuntu-24.04
-            image: ubuntu:24.04
-          - name: debian-12
-            image: debian:12
-          - name: debian-13
-            image: debian:trixie
-          - name: rocky-9
-            image: rockylinux:9
-          - name: alma-9
-            image: almalinux:9
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install Ansible tooling
-        shell: bash
-        run: |
-          if [ -f /etc/debian_version ]; then
-            apt-get update
-            DEBIAN_FRONTEND=noninteractive apt-get install -y python3-pip git
-            if python3 -m pip install --help | grep -q -- --break-system-packages; then
-              python3 -m pip install --break-system-packages ansible-core==2.15.13
-            else
-              python3 -m pip install ansible-core==2.15.13
-            fi
-          else
-            dnf -y install python3-pip git
-            python3 -m pip install ansible-core==2.15.13
-          fi
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-lint.txt
+            tests/constraints-lint.txt
+      - name: Install lint toolchain
+        run: python -m pip install -r tests/requirements-lint.txt
       - name: Install role and collection dependencies
         run: |
           ansible-galaxy role install --force -r requirements.yml -p roles
           ansible-galaxy collection install -r requirements.yml
-      - name: Validate syntax on ${{ matrix.name }}
-        run: ansible-playbook -i inventory_example.ini deploy.yml --syntax-check
+      - name: Lint production playbook and role
+        run: >-
+          ansible-lint --exclude group_vars --exclude roles/warp_native
+          --exclude roles/deploy-rw-by-lynx/tasks/make_certs.yml
+          deploy.yml roles/deploy-rw-by-lynx
+      - name: Lint Molecule and test YAML
+        run: yamllint molecule tests .github/workflows/ansible.yml
+      - name: Validate task-file references
+        run: python tests/assertions/check_tasks_from.py
+      - name: Validate deployment syntax
+        run: |
+          ansible-playbook -i inventory_example.ini deploy.yml --syntax-check
+          ansible-playbook -i inventory_example.ini tests/playbooks/tasks_from_syntax.yml --syntax-check
+
+  molecule-system:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-test.txt
+            tests/constraints-test.txt
+      - name: Install Molecule toolchain
+        run: python -m pip install -r tests/requirements-test.txt
+      - name: Install Ansible dependencies
+        run: |
+          ansible-galaxy role install --force -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Run system scenario
+        env:
+          MOLECULE_DISTRO: ubuntu2404
+          MOLECULE_IMAGE: ubuntu:24.04
+          ANSIBLE_VERBOSITY: '3'
+        run: |
+          set +e
+          set -o pipefail
+          molecule test -s system 2>&1 | tee molecule-system.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python tests/assertions/assert_no_secret_leaks.py molecule-system.log
+          exit "$status"
+      - name: Destroy system scenario after failure
+        if: always()
+        env:
+          MOLECULE_DISTRO: ubuntu2404
+          MOLECULE_IMAGE: ubuntu:24.04
+        run: molecule destroy -s system
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: molecule-system-ubuntu2404
+          path: molecule-system.log
+
+  molecule-api:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        ansible-core: ['2.15.13', '2.16.14']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-test.txt
+            tests/constraints-test.txt
+      - name: Install Molecule toolchain
+        run: |
+          python -m pip install -r tests/requirements-test.txt
+          python -m pip install --upgrade ansible-core==${{ matrix.ansible-core }}
+      - name: Install Ansible dependencies
+        run: |
+          ansible-galaxy role install --force -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Run API scenario
+        env:
+          ANSIBLE_VERBOSITY: '3'
+        run: |
+          set +e
+          set -o pipefail
+          molecule test -s api 2>&1 | tee molecule-api.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python tests/assertions/assert_no_secret_leaks.py molecule-api.log
+          exit "$status"
+      - name: Destroy API scenario after failure
+        if: always()
+        run: molecule destroy -s api
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: molecule-api-${{ matrix.ansible-core }}
+          path: molecule-api.log
+
+  molecule-firewall:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-test.txt
+            tests/constraints-test.txt
+      - run: python -m pip install -r tests/requirements-test.txt
+      - name: Install Ansible dependencies
+        run: |
+          ansible-galaxy role install --force -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Run firewall scenario
+        env:
+          MOLECULE_DISTRO: ubuntu2404
+          MOLECULE_IMAGE: ubuntu:24.04
+        run: |
+          set +e
+          set -o pipefail
+          molecule test -s firewall 2>&1 | tee molecule-firewall.log
+          status=${PIPESTATUS[0]}
+          exit "$status"
+      - name: Destroy firewall scenario after failure
+        if: always()
+        env:
+          MOLECULE_DISTRO: ubuntu2404
+          MOLECULE_IMAGE: ubuntu:24.04
+        run: molecule destroy -s firewall
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: molecule-firewall-ubuntu2404
+          path: molecule-firewall.log
+
+  molecule-warp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-test.txt
+            tests/constraints-test.txt
+      - run: python -m pip install -r tests/requirements-test.txt
+      - name: Install Ansible dependencies
+        run: |
+          ansible-galaxy role install --force -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Run WARP scenario
+        env:
+          MOLECULE_DISTRO: ubuntu2404
+          MOLECULE_IMAGE: ubuntu:24.04
+          ANSIBLE_VERBOSITY: '3'
+        run: |
+          set +e
+          set -o pipefail
+          molecule test -s warp 2>&1 | tee molecule-warp.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python tests/assertions/assert_no_secret_leaks.py molecule-warp.log
+          exit "$status"
+      - name: Destroy WARP scenario after failure
+        if: always()
+        env:
+          MOLECULE_DISTRO: ubuntu2404
+          MOLECULE_IMAGE: ubuntu:24.04
+        run: molecule destroy -s warp
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: molecule-warp-ubuntu2404
+          path: molecule-warp.log
+
+  molecule-contracts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: |
+            tests/requirements-test.txt
+            tests/constraints-test.txt
+      - name: Install SSH and Molecule tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sshpass
+          python -m pip install -r tests/requirements-test.txt
+      - name: Install Ansible dependencies
+        run: |
+          ansible-galaxy role install --force -r requirements.yml -p roles
+          ansible-galaxy collection install -r requirements.yml
+      - name: Run tag contract scenario
+        env:
+          ANSIBLE_VERBOSITY: '3'
+        run: |
+          set +e
+          set -o pipefail
+          molecule test -s tags 2>&1 | tee molecule-tags.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python tests/assertions/assert_no_secret_leaks.py molecule-tags.log
+          exit "$status"
+      - name: Destroy tag scenario
+        if: always()
+        run: molecule destroy -s tags
+      - name: Run SSH contract scenario
+        env:
+          ANSIBLE_VERBOSITY: '3'
+        run: |
+          set +e
+          set -o pipefail
+          molecule test -s ssh 2>&1 | tee molecule-ssh.log
+          status=${PIPESTATUS[0]}
+          set -e
+          python tests/assertions/assert_no_secret_leaks.py molecule-ssh.log
+          exit "$status"
+      - name: Destroy SSH scenario
+        if: always()
+        run: molecule destroy -s ssh
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: molecule-contract-logs
+          path: molecule-*.log

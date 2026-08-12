@@ -171,7 +171,8 @@ The public deployment knobs are `panel_control_port`, `panel_control_ip`,
 `nginx_image`, `remnanode_image`, `docker_pull_policy`,
 `templates_repo_version`, `fake_site_force_regenerate`,
 `firewall_public_tcp_ports`, `firewall_public_udp_ports`,
-`firewall_blacklist_urls`, and `firewall_whitelist_path`. `force_reinstall`
+`firewall_blacklist_urls`, `firewall_whitelist_path`, `cf_api_base_url`, and
+`public_ip_lookup_url`. `force_reinstall`
 rotates the managed Remnanode secret, recreates its container, and PATCHes the
 existing panel record; it never creates a duplicate record.
 
@@ -180,6 +181,38 @@ candidate first, then deliberately executes `flush ruleset`, recreates the manag
 `inet filter` table, and restarts Docker so its nftables/NAT chains are rebuilt. A
 controller-local `whitelist.nft` can define `whitelist_v4` and optionally
 `whitelist_v6` sets in `table inet filter`; it is compiled into that managed table.
+
+## Tests
+
+The repository uses isolated Molecule scenarios. They never contact production
+Cloudflare or Remnawave APIs and use sentinel credentials plus a local mock API.
+All target containers are disposable and the firewall scenario is privileged
+because it deliberately executes `flush ruleset` inside its own network namespace.
+
+Install the test toolchain and project dependencies:
+
+```bash
+python -m pip install -r tests/requirements-test.txt
+ansible-galaxy role install --force -r requirements.yml -p roles
+ansible-galaxy collection install -r requirements.yml
+```
+
+Run one scenario:
+
+```bash
+molecule test -s api
+MOLECULE_DISTRO=debian12 MOLECULE_IMAGE=debian:12 molecule test -s system
+```
+
+Available scenarios are `system`, `api`, `firewall`, `tags`, `warp`, and `ssh`.
+`system` tests the complete stable converge except firewall; firewall has a separate
+scenario because a deliberate complete ruleset replacement is always reported as a
+change. Automatic CI runs use Ubuntu 24.04. Other supported distributions can still
+be tested locally by overriding `MOLECULE_DISTRO` and `MOLECULE_IMAGE`.
+
+`cf_api_base_url` and `public_ip_lookup_url` exist to make external HTTP dependencies
+replaceable in tests. Their production defaults remain the official Cloudflare API
+and `api.ipify.org`.
 
 ## License
 

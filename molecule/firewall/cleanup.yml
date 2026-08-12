@@ -1,0 +1,8 @@
+---
+- name: Cleanup firewall scenario
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Report isolated firewall fixture cleanup
+      ansible.builtin.debug:
+        msg: Firewall network namespaces are removed by verify traps and container destroy.

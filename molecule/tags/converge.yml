@@ -1,0 +1,3 @@
+---
+- name: Import system scenario converge
+  ansible.builtin.import_playbook: ../system/converge.yml

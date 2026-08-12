@@ -1,0 +1,62 @@
+---
+- name: Converge firewall scenario
+  hosts: all
+  become: true
+  tasks:
+    - name: Install Docker before firewall rebuild test
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_docker
+
+    - name: Inspect Docker NAT fixture image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, nginx:alpine]
+      register: firewall_nginx_image
+      changed_when: false
+      failed_when: false
+
+    - name: Pull Docker NAT fixture image
+      ansible.builtin.command:
+        argv: [docker, pull, nginx:alpine]
+      when: firewall_nginx_image.rc != 0
+      changed_when: true
+
+    - name: Inspect Docker NAT fixture container
+      ansible.builtin.command:
+        argv: [docker, container, inspect, firewall-docker-fixture]
+      register: firewall_fixture_container
+      changed_when: false
+      failed_when: false
+
+    - name: Start restartable Docker NAT fixture
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --detach
+          - --name
+          - firewall-docker-fixture
+          - --restart
+          - always
+          - --publish
+          - 18090:80
+          - nginx:alpine
+      when: firewall_fixture_container.rc != 0
+      changed_when: true
+
+    - name: Apply managed firewall
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: block_asn
+
+    - name: Record first firewall configuration checksum
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: first_firewall_config
+
+    - name: Save first firewall checksum for later phases
+      ansible.builtin.copy:
+        dest: /opt/rw-test/firewall/first-checksum
+        mode: '0600'
+        content: "{{ first_firewall_config.stat.checksum }}\n"

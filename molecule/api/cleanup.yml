@@ -1,0 +1,8 @@
+---
+- name: Cleanup API scenario
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Report isolated API fixture cleanup
+      ansible.builtin.debug:
+        msg: API fixtures are isolated in the Molecule container.

@@ -1,0 +1,17 @@
+---
+- name: Verify serial stop contract
+  hosts: bootstrap_targets
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Fail first target deliberately
+      ansible.builtin.fail:
+        msg: deliberate first-host failure
+      when: inventory_hostname == 'password-target'
+
+    - name: Mark any host that progressed
+      ansible.builtin.file:
+        path: /tmp/rw-serial-progressed
+        state: touch
+        mode: '0600'

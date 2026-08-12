@@ -1,0 +1,7 @@
+table inet filter {
+    set blacklist_v6 {
+        type ipv6_addr
+        flags interval
+        elements = { 2001:db8:ffff::/48 }
+    }
+}

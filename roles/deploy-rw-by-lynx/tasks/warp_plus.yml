@@ -23,6 +23,11 @@
 
 # Нормализуем: заполняем отсутствующие поля (used_on, still_valid).
 # Обращаемся к warp_pool_raw['keys'] через скобки — .keys конфликтует с методом dict.
+- name: Reset normalized WARP key pool
+  ansible.builtin.set_fact:
+    warp_pool_keys: []
+  no_log: true
+
 - name: Normalize warp pool keys
   ansible.builtin.set_fact:
     warp_pool_keys: "{{ (warp_pool_keys | default([])) + [ {'used_on': [], 'still_valid': true} | combine(_k) ] }}"
@@ -79,6 +84,7 @@
   loop_control:
     loop_var: warp_key
   when: not warp_plus_done
+  no_log: true
 
 # Регенерация конфига только если ключ реально сменился.
 - name: Reconfigure WARP after key change

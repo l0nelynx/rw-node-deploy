@@ -1,0 +1,65 @@
+---
+dependency:
+  name: galaxy
+  options:
+    role-file: requirements.yml
+    requirements-file: requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: api-ubuntu2404
+    image: ubuntu:24.04
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    tty: true
+    cgroupns_mode: host
+    env:
+      container: docker
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs: [/run, /run/lock]
+    published_ports:
+      - 127.0.0.1:18081:8080/tcp
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        ansible_user: root
+        main_domain: example.test
+        sub_mask: api
+        sub_count: 1
+        pp_map: [0]
+        panel_control_port: 2222
+        install_warp: false
+        force_reinstall: false
+        rw_endpoint: http://127.0.0.1:8080
+        rw_token: RW_API_SENTINEL_DO_NOT_LOG
+        rw_config_uuid: config-test
+        rw_inbounds: [VLESS_TCP_REALITY_NGINX, TCP_TLS_NGINX]
+        remnanode_image: rw-test/remnanode:local
+        custom_core_url: https://example.test/custom-core
+        docker_pull_policy: never
+        cf_token: CF_API_SENTINEL_DO_NOT_LOG
+        cf_zone_id: testzone
+        cf_api_base_url: http://127.0.0.1:18081/client/v4
+        cf_dns_ttl: 1
+        cf_dns_proxied: false
+        current_ip: 198.51.100.10
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - idempotence
+    - side_effect
+    - verify
+    - cleanup
+    - destroy

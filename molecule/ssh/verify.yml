@@ -1,0 +1,17 @@
+---
+- name: Verify SSH fixture key pair
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Inspect generated service key pair
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /tmp/rw-node-molecule-ssh/service
+        - /tmp/rw-node-molecule-ssh/service.pub
+      register: service_keys
+
+    - name: Require complete service key pair
+      ansible.builtin.assert:
+        that: item.stat.exists
+      loop: "{{ service_keys.results }}"

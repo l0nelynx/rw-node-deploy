@@ -11,7 +11,7 @@
 
 - name: Get current public IPv4 address
   ansible.builtin.uri:
-    url: https://api.ipify.org
+    url: "{{ public_ip_lookup_url }}"
     return_content: true
     timeout: 20
   register: public_ip_result
@@ -24,7 +24,7 @@
 - name: Assert public IPv4 format
   ansible.builtin.assert:
     that: current_ip is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
-    fail_msg: api.ipify.org did not return an IPv4 address.
+    fail_msg: The configured public IP endpoint did not return an IPv4 address.
 
 - name: Reset computed subdomains
   ansible.builtin.set_fact:

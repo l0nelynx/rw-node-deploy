@@ -1,0 +1,85 @@
+---
+- name: Verify system scenario
+  hosts: all
+  become: true
+  tasks:
+    - name: Verify Docker components
+      ansible.builtin.command:
+        argv: [docker, "{{ item }}", version]
+      loop: [compose, buildx]
+      changed_when: false
+
+    - name: Inspect managed files
+      ansible.builtin.stat:
+        path: "{{ item.path }}"
+      loop:
+        - {path: /opt/remnanode/.env, mode: '0600'}
+        - {path: /opt/remnanode/docker-compose.yml, mode: '0644'}
+        - {path: /opt/nginx/docker-compose.yml, mode: '0644'}
+        - {path: /opt/nginx/html/index.html, mode: '0644'}
+        - {path: /opt/nginx/certs/fullchain.crt, mode: '0644'}
+      register: managed_files
+
+    - name: Require managed files and permissions
+      ansible.builtin.assert:
+        that:
+          - item.stat.exists
+          - item.stat.mode == item.item.mode
+      loop: "{{ managed_files.results }}"
+
+    - name: Read protected Remnanode environment
+      ansible.builtin.slurp:
+        src: /opt/remnanode/.env
+      register: remnanode_env
+      no_log: true
+
+    - name: Verify protected Remnanode environment fields
+      ansible.builtin.assert:
+        that:
+          - "'NODE_PORT=2222' in (remnanode_env.content | b64decode)"
+          - "'SECRET_KEY=test-secret-0001' in (remnanode_env.content | b64decode)"
+          - "'CUSTOM_CORE_URL=https://example.test/xray-core' in (remnanode_env.content | b64decode)"
+      no_log: true
+
+    - name: Read Remnanode startup evidence
+      ansible.builtin.slurp:
+        src: /dev/shm/remnanode-test-start.json
+      register: remnanode_start
+
+    - name: Verify Remnanode received environment before startup
+      ansible.builtin.assert:
+        that:
+          - (remnanode_start.content | b64decode | from_json).port == 2222
+          - (remnanode_start.content | b64decode | from_json).secret_present
+          - (remnanode_start.content | b64decode | from_json).custom_core_url == 'https://example.test/xray-core'
+
+    - name: Verify managed containers are running
+      ansible.builtin.command:
+        argv: [docker, inspect, -f, "{% raw %}{{.State.Running}}{% endraw %}", "{{ item }}"]
+      loop: [nginx, remnanode]
+      register: running_containers
+      changed_when: false
+
+    - name: Require running containers
+      ansible.builtin.assert:
+        that: item.stdout == 'true'
+      loop: "{{ running_containers.results }}"
+
+    - name: Validate generated certificate
+      ansible.builtin.command:
+        argv: [openssl, x509, -in, /opt/nginx/certs/fullchain.crt, -noout]
+      changed_when: false
+
+    - name: Read mock API state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: mock_state
+      changed_when: false
+
+    - name: Verify reconciled API state
+      ansible.builtin.assert:
+        that:
+          - mock_state.json.nodes | length == 1
+          - mock_state.json.dns_records | length == 3
+          - mock_state.json.keygen_count == 1

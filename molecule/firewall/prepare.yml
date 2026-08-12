@@ -1,0 +1,49 @@
+---
+- name: Prepare firewall scenario
+  hosts: all
+  become: true
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    - name: Create firewall fixture directory
+      ansible.builtin.file:
+        path: /opt/rw-test/firewall
+        state: directory
+        mode: '0755'
+
+    - name: Copy firewall fixtures
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/tests/fixtures/firewall/"
+        dest: /opt/rw-test/firewall/
+        mode: preserve
+
+    - name: Create nested Docker configuration directory
+      ansible.builtin.file:
+        path: /etc/docker
+        state: directory
+        mode: '0755'
+
+    - name: Configure nested Docker storage
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+        content: |
+          {"storage-driver":"vfs"}
+
+    - name: Install UFW fixture on Debian-family targets
+      ansible.builtin.apt:
+        name: ufw
+        state: present
+        update_cache: true
+      when: ansible_facts.os_family == 'Debian'
+
+    - name: Enable UFW fixture before managed firewall converge
+      ansible.builtin.command:
+        argv: [ufw, --force, enable]
+      when: ansible_facts.os_family == 'Debian'
+      changed_when: true
+
+    - name: Create foreign nftables table before reconciliation
+      ansible.builtin.command:
+        argv: [nft, add, table, inet, foreign_ci]
+      changed_when: true

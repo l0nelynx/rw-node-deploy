@@ -1,0 +1,55 @@
+---
+- name: Verify WARP scenario
+  hosts: all
+  become: true
+  tasks:
+    - name: Read applied WARP account type
+      ansible.builtin.command:
+        argv: [wgcf, status]
+      register: warp_status
+      changed_when: false
+
+    - name: Require successful unlimited account
+      ansible.builtin.assert:
+        that: "'unlimited' in warp_status.stdout"
+
+    - name: Read persisted controller key pool
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/warp_plus.json"
+        name: persisted_pool
+      no_log: true
+
+    - name: Verify key-pool ownership semantics
+      ansible.builtin.assert:
+        that:
+          - persisted_pool['keys'][0].still_valid
+          - persisted_pool['keys'][0].used_on | length == 0
+          - persisted_pool['keys'][1].still_valid
+          - persisted_pool['keys'][1].used_on | length == 0
+          - persisted_pool['keys'][2].still_valid
+          - inventory_hostname in persisted_pool['keys'][2].used_on
+      no_log: true
+
+    - name: Inspect persisted WARP key-pool permissions
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/warp_plus.json"
+      delegate_to: localhost
+      become: false
+      register: persisted_pool_file
+
+    - name: Require protected WARP key-pool permissions
+      ansible.builtin.assert:
+        that: persisted_pool_file.stat.mode == '0600'
+
+    - name: Verify WARP configuration hardening
+      ansible.builtin.slurp:
+        src: /etc/wireguard/warp.conf
+      register: warp_config
+
+    - name: Require generated WARP configuration fields
+      ansible.builtin.assert:
+        that:
+          - "'Table = off' in (warp_config.content | b64decode)"
+          - "'DNS =' not in (warp_config.content | b64decode)"
+          - "'/128' not in (warp_config.content | b64decode)"
+          - "'Endpoint = 162.159.192.1:2408' in (warp_config.content | b64decode)"

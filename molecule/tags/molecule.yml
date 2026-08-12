@@ -1,0 +1,70 @@
+---
+dependency:
+  name: galaxy
+  options:
+    role-file: requirements.yml
+    requirements-file: requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: tags-ubuntu2404
+    image: ubuntu:24.04
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    tty: true
+    cgroupns_mode: host
+    env:
+      container: docker
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+      - /lib/modules:/lib/modules:ro
+    tmpfs: [/run, /run/lock]
+    published_ports:
+      - 127.0.0.1:18082:8080/tcp
+provisioner:
+  name: ansible
+  options:
+    skip-tags: firewall,security,sysctl
+  inventory:
+    group_vars:
+      all:
+        ansible_user: root
+        ansible_port: 22
+        main_domain: example.test
+        sub_mask: tags
+        sub_count: 2
+        pp_map: [1, 0]
+        panel_control_port: 2222
+        install_warp: false
+        force_reinstall: false
+        cf_token: CF_TAG_SENTINEL_DO_NOT_LOG
+        cf_zone_id: testzone
+        cf_api_base_url: http://127.0.0.1:18082/client/v4
+        public_ip_lookup_url: http://127.0.0.1:8080/ip
+        rw_endpoint: http://127.0.0.1:8080
+        rw_token: RW_TAG_SENTINEL_DO_NOT_LOG
+        rw_config_uuid: config-test
+        rw_inbounds: [VLESS_TCP_REALITY_NGINX, TCP_TLS_NGINX]
+        target_dir: /opt/nginx
+        templates_repo_url: file:///opt/rw-test/template-repo
+        templates_repo_version: main
+        nginx_image: nginx:alpine
+        remnanode_image: rw-test/remnanode:local
+        custom_core_url: https://example.test/tag-core
+        docker_pull_policy: never
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - cleanup
+    - destroy

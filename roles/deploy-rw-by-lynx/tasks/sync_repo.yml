@@ -99,6 +99,11 @@
     path: "{{ target_dir }}/html/index.html"
   register: fake_site_index
 
+- name: Check current fake-site root
+  ansible.builtin.stat:
+    path: "{{ target_dir }}/html"
+  register: fake_site_root
+
 - name: Decide whether fake site needs regeneration
   ansible.builtin.set_fact:
     fake_site_regenerate: >-
@@ -170,7 +175,7 @@
     - name: Move current fake site aside
       ansible.builtin.command:
         argv: [mv, "{{ target_dir }}/html", "{{ target_dir }}/html.previous"]
-      when: fake_site_index.stat.exists
+      when: fake_site_root.stat.exists
       changed_when: true
 
     - name: Activate generated fake site
@@ -210,15 +215,27 @@
         path: "{{ target_dir }}/html"
       register: active_fake_site
 
+    - name: Remove failed fake-site replacement before rollback
+      ansible.builtin.file:
+        path: "{{ target_dir }}/html"
+        state: absent
+      when: previous_fake_site.stat.exists and active_fake_site.stat.exists
+
     - name: Restore previous fake site
       ansible.builtin.command:
         argv: [mv, "{{ target_dir }}/html.previous", "{{ target_dir }}/html"]
-      when: previous_fake_site.stat.exists and not active_fake_site.stat.exists
+      when: previous_fake_site.stat.exists
       changed_when: true
 
     - name: Stop after failed fake-site generation
       ansible.builtin.fail:
         msg: Fake-site generation failed; the previous site was restored when available.
+
+- name: Normalize fake-site entrypoint permissions
+  ansible.builtin.file:
+    path: "{{ target_dir }}/html/index.html"
+    state: file
+    mode: '0644'
 
 - name: Show synchronized fake-site source revision
   ansible.builtin.debug:

@@ -1,0 +1,60 @@
+---
+- name: Prepare API scenario
+  hosts: all
+  become: true
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    - name: Create API fixture directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/rw-test/mock-api
+        - /opt/rw-test/remnanode-stub
+        - /etc/docker
+
+    - name: Configure nested Docker storage
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+        content: |
+          {"storage-driver":"vfs"}
+
+    - name: Copy API fixtures
+      ansible.builtin.copy:
+        src: "{{ item.src }}"
+        dest: "{{ item.dest }}"
+        mode: preserve
+      loop:
+        - src: "{{ project_dir }}/tests/fixtures/mock-api/server.py"
+          dest: /opt/rw-test/mock-api/server.py
+        - src: "{{ project_dir }}/tests/fixtures/remnanode-stub/"
+          dest: /opt/rw-test/remnanode-stub/
+
+    - name: Install mock API service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/rw-test-api.service
+        mode: '0644'
+        content: |
+          [Service]
+          ExecStart=/usr/bin/python3 /opt/rw-test/mock-api/server.py
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start mock API
+      ansible.builtin.systemd:
+        name: rw-test-api.service
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Wait for mock API
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+      register: api_ready
+      until: api_ready.status == 200
+      retries: 15
+      delay: 1

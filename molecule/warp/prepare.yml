@@ -1,0 +1,70 @@
+---
+- name: Prepare WARP scenario
+  hosts: all
+  become: true
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    - name: Create WARP fixture directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /etc/wireguard
+        - /opt/warp-native/logs
+
+    - name: Install WARP command stubs
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/tests/fixtures/warp/{{ item }}"
+        dest: "/usr/local/bin/{{ item }}"
+        mode: '0755'
+      loop: [wgcf, wg, ping, getent]
+
+    - name: Initialize free WARP account
+      ansible.builtin.copy:
+        dest: /tmp/rw-test-wgcf-account
+        mode: '0600'
+        content: "free\n"
+
+    - name: Install initial WARP configuration
+      ansible.builtin.copy:
+        dest: /etc/wireguard/warp.conf
+        mode: '0600'
+        content: |
+          [Interface]
+          PrivateKey = fixture
+          MTU = 1280
+          [Peer]
+          Endpoint = 192.0.2.1:2408
+
+    - name: Install dummy WARP systemd service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/wg-quick@warp.service
+        mode: '0644'
+        content: |
+          [Service]
+          Type=simple
+          ExecStart=/bin/sleep infinity
+
+    - name: Start dummy WARP service
+      ansible.builtin.systemd:
+        name: wg-quick@warp.service
+        state: started
+        daemon_reload: true
+
+    - name: Create controller-side WARP key pool fixture
+      ansible.builtin.copy:
+        dest: "{{ playbook_dir }}/warp_plus.json"
+        mode: '0600'
+        content: |
+          {
+            "keys": [
+              {"key": "FAIL-WARP-SENTINEL", "used_on": [], "still_valid": true},
+              {"key": "LIMITED-WARP-SENTINEL", "used_on": [], "still_valid": true},
+              {"key": "GOOD-WARP-SENTINEL", "used_on": [], "still_valid": true}
+            ]
+          }
+      delegate_to: localhost
+      become: false
+      no_log: true

@@ -1,0 +1,3 @@
+---
+- name: Import system scenario cleanup
+  ansible.builtin.import_playbook: ../system/cleanup.yml

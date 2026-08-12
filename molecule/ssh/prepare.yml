@@ -1,0 +1,115 @@
+---
+- name: Prepare SSH targets
+  hosts: all
+  become: true
+  tasks:
+    - name: Configure root SSH access
+      ansible.builtin.copy:
+        dest: /etc/ssh/sshd_config.d/99-molecule.conf
+        mode: '0600'
+        content: |
+          PermitRootLogin yes
+          PasswordAuthentication yes
+          PubkeyAuthentication yes
+
+    - name: Set fixture root password
+      ansible.builtin.shell: |
+        set -o pipefail
+        printf 'root:%s\n' 'ROOT_PASSWORD_SENTINEL_DO_NOT_LOG' | chpasswd
+      args:
+        executable: /bin/bash
+      no_log: true
+      changed_when: true
+
+    - name: Restart SSH daemon
+      ansible.builtin.systemd:
+        name: ssh.service
+        state: restarted
+
+- name: Prepare controller SSH material
+  hosts: localhost
+  gather_facts: false
+  vars:
+    ssh_test_dir: /tmp/rw-node-molecule-ssh
+  tasks:
+    - name: Create controller SSH fixture directory
+      ansible.builtin.file:
+        path: "{{ ssh_test_dir }}"
+        state: directory
+        mode: '0700'
+
+    - name: Generate master fixture key
+      ansible.builtin.command:
+        argv: [ssh-keygen, -q, -t, ed25519, -N, '', -f, "{{ ssh_test_dir }}/master"]
+      args:
+        creates: "{{ ssh_test_dir }}/master"
+
+    - name: Read master public key
+      ansible.builtin.slurp:
+        src: "{{ ssh_test_dir }}/master.pub"
+      register: master_public_key
+
+    - name: Create actual SSH inventory
+      ansible.builtin.copy:
+        dest: "{{ ssh_test_dir }}/inventory.yml"
+        mode: '0600'
+        content: |
+          all:
+            children:
+              bootstrap_targets:
+                hosts:
+                  password-target:
+                    ansible_host: 127.0.0.1
+                    ansible_port: 22222
+                    ansible_user: root
+                    ansible_password: ROOT_PASSWORD_SENTINEL_DO_NOT_LOG
+                    root_pass: ROOT_PASSWORD_SENTINEL_DO_NOT_LOG
+                    ansible_ssh_args: >-
+                      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+                      -o GlobalKnownHostsFile=/dev/null -o BatchMode=no
+                  master-target:
+                    ansible_host: 127.0.0.1
+                    ansible_port: 22223
+                    ansible_user: root
+                    ansible_ssh_private_key_file: {{ ssh_test_dir }}/master
+                    master_key: {{ ssh_test_dir }}/master
+                    ansible_ssh_args: >-
+                      -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+                      -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes
+                vars:
+                  service_key_path: {{ ssh_test_dir }}/service
+                  ansible_ssh_common_args: >-
+                    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+                    -o GlobalKnownHostsFile=/dev/null -o BatchMode=no
+      no_log: true
+
+    - name: Create service-key-only SSH inventory
+      ansible.builtin.copy:
+        dest: "{{ ssh_test_dir }}/service-inventory.yml"
+        mode: '0600'
+        content: |
+          all:
+            children:
+              bootstrap_targets:
+                hosts:
+                  password-target:
+                    ansible_host: 127.0.0.1
+                    ansible_port: 22222
+                  master-target:
+                    ansible_host: 127.0.0.1
+                    ansible_port: 22223
+                vars:
+                  ansible_user: root
+                  ansible_ssh_private_key_file: {{ ssh_test_dir }}/service
+                  ansible_ssh_args: >-
+                    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+                    -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes
+                  ansible_ssh_common_args: >-
+                    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+                    -o GlobalKnownHostsFile=/dev/null -o BatchMode=yes
+
+    - name: Install master public key on master target
+      ansible.posix.authorized_key:
+        user: root
+        key: "{{ master_public_key.content | b64decode | trim }}"
+      delegate_to: ssh-master

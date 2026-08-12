@@ -1,0 +1,49 @@
+---
+- name: Parse every public role task entrypoint
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Parse SSH bootstrap task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_keys.yml
+
+    - name: Parse preflight task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: preflight.yml
+
+    - name: Parse Docker task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_docker.yml
+
+    - name: Parse Remnanode task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_remnanode.yml
+
+    - name: Parse Cloudflare task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: ensure_cloudflare_record.yml
+
+    - name: Parse firewall task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: block_asn.yml
+
+    - name: Parse WARP endpoint task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_endpoint.yml
+
+    - name: Parse WARP key-pool task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_plus.yml
+
+    - name: Parse WARP watchdog task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_watchdog.yml

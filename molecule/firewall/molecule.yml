@@ -1,0 +1,56 @@
+---
+dependency:
+  name: galaxy
+  options:
+    role-file: requirements.yml
+    requirements-file: requirements.yml
+driver:
+  name: docker
+platforms:
+  - name: "firewall-${MOLECULE_DISTRO:-debian12}"
+    image: "${MOLECULE_IMAGE:-debian:12}"
+    pre_build_image: false
+    privileged: true
+    command: /sbin/init
+    tty: true
+    cgroupns_mode: host
+    env:
+      container: docker
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:rw
+    tmpfs: [/run, /run/lock]
+provisioner:
+  name: ansible
+  inventory:
+    group_vars:
+      all:
+        ansible_user: root
+        ansible_port: 22022
+        main_domain: example.test
+        sub_mask: firewall
+        sub_count: 1
+        pp_map: [0]
+        install_warp: false
+        panel_control_port: 2222
+        panel_control_ip: [198.51.100.10, '2001:db8:ffff::10']
+        firewall_public_tcp_ports: [443, 8443]
+        firewall_public_udp_ports: [443, 8443]
+        firewall_blacklist_urls:
+          v4: file:///opt/rw-test/firewall/blacklist-v4.nft
+          v6: file:///opt/rw-test/firewall/blacklist-v6.nft
+        firewall_whitelist_path: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/tests/fixtures/firewall/whitelist.nft"
+verifier:
+  name: ansible
+scenario:
+  test_sequence:
+    - dependency
+    - cleanup
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - cleanup
+    - destroy

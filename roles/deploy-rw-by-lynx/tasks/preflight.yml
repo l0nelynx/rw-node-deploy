@@ -26,6 +26,8 @@
       - firewall_public_tcp_ports is not string
       - firewall_public_udp_ports is sequence
       - firewall_public_udp_ports is not string
+      - cf_api_base_url is match('^https?://')
+      - public_ip_lookup_url is match('^https?://')
     fail_msg: Domain, subdomain, port, sub_count, pp_map, or firewall port values are invalid.
 
 - name: Assert public firewall port ranges

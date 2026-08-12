@@ -1,0 +1,67 @@
+---
+- name: Converge system scenario
+  hosts: all
+  become: true
+  tasks:
+    - name: Install Docker before building fixture image
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_docker
+
+    - name: Inspect local Remnanode fixture image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, rw-test/remnanode:local]
+      register: remnanode_fixture_image
+      changed_when: false
+      failed_when: false
+
+    - name: Build local Remnanode fixture image
+      ansible.builtin.command:
+        argv: [docker, build, -t, rw-test/remnanode:local, /opt/rw-test/remnanode-stub]
+      when: remnanode_fixture_image.rc != 0
+      changed_when: true
+
+    - name: Inspect nginx fixture image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, nginx:alpine]
+      register: nginx_fixture_image
+      changed_when: false
+      failed_when: false
+
+    - name: Pull nginx fixture image
+      ansible.builtin.command:
+        argv: [docker, pull, nginx:alpine]
+      when: nginx_fixture_image.rc != 0
+      changed_when: true
+
+    - name: Check existing Remnanode environment before converge
+      ansible.builtin.stat:
+        path: /opt/remnanode/.env
+      register: env_before_stat
+      changed_when: false
+
+    - name: Read existing Remnanode environment before converge
+      ansible.builtin.slurp:
+        src: /opt/remnanode/.env
+      register: env_before
+      changed_when: false
+      when: env_before_stat.stat.exists
+      no_log: true
+
+    - name: Apply complete role except separately tested firewall
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+
+    - name: Read Remnanode environment after converge
+      ansible.builtin.slurp:
+        src: /opt/remnanode/.env
+      register: env_after
+      changed_when: false
+      no_log: true
+
+    - name: Require stable Remnanode secret on repeat converge
+      ansible.builtin.assert:
+        that: env_before.content == env_after.content
+        fail_msg: Remnanode environment unexpectedly changed on repeat converge.
+      when: env_before_stat.stat.exists
+      no_log: true

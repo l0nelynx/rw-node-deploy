@@ -2,7 +2,7 @@
 - name: Look up Cloudflare A record
   ansible.builtin.uri:
     url: >-
-      https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records?type=A&name={{ cf_dns_name | urlencode }}
+      {{ cf_api_base_url }}/zones/{{ cf_zone_id }}/dns_records?type=A&name={{ cf_dns_name | urlencode }}
     method: GET
     headers:
       Authorization: "Bearer {{ cf_token }}"
@@ -29,7 +29,7 @@
 
 - name: Create missing Cloudflare A record
   ansible.builtin.uri:
-    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records"
+    url: "{{ cf_api_base_url }}/zones/{{ cf_zone_id }}/dns_records"
     method: POST
     headers:
       Authorization: "Bearer {{ cf_token }}"
@@ -52,7 +52,7 @@
 
 - name: Update stale Cloudflare A record
   ansible.builtin.uri:
-    url: "https://api.cloudflare.com/client/v4/zones/{{ cf_zone_id }}/dns_records/{{ cf_existing_record.id }}"
+    url: "{{ cf_api_base_url }}/zones/{{ cf_zone_id }}/dns_records/{{ cf_existing_record.id }}"
     method: PUT
     headers:
       Authorization: "Bearer {{ cf_token }}"

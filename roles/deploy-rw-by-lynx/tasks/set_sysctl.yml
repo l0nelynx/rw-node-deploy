@@ -10,6 +10,12 @@
     that: "'bbr' in available_congestion_controls.stdout.split()"
     fail_msg: BBR is not available in the current kernel.
 
+- name: Ensure sysctl drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/sysctl.d
+    state: directory
+    mode: '0755'
+
 - name: Render rw-node sysctl drop-in
   ansible.builtin.copy:
     dest: /etc/sysctl.d/90-rw-node.conf

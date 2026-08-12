@@ -1,0 +1,2 @@
+#!/bin/sh
+test -f /tmp/rw-test-ipv6-ok

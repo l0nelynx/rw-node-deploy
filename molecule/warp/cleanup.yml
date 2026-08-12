@@ -1,0 +1,9 @@
+---
+- name: Cleanup WARP controller fixture
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Remove generated scenario key pool
+      ansible.builtin.file:
+        path: "{{ playbook_dir }}/warp_plus.json"
+        state: absent

@@ -1,0 +1,24 @@
+---
+- name: Converge WARP integration tasks
+  hosts: all
+  become: true
+  tasks:
+    - name: Validate Debian-family WARP preflight
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: preflight
+
+    - name: Reconcile WARP endpoint
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_endpoint
+
+    - name: Apply WARP key pool
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_plus
+
+    - name: Configure WARP watchdog
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_watchdog

@@ -1,0 +1,541 @@
+---
+- name: Exercise Remnawave and Cloudflare state transitions
+  hosts: all
+  become: true
+  tasks:
+    - name: Read idempotent baseline state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: baseline_state
+      changed_when: false
+
+    - name: Verify baseline created exactly one node without PATCH
+      ansible.builtin.assert:
+        that:
+          - baseline_state.json.nodes | length == 1
+          - baseline_state.json.requests | selectattr('method', 'equalto', 'POST') | selectattr('path', 'equalto', '/api/nodes') | list | length == 1
+          - baseline_state.json.requests | selectattr('method', 'equalto', 'PATCH') | list | length == 0
+
+    - name: Arrange existing node with reversed inbound object order
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          nodes:
+            - uuid: order-node
+              name: api-ubuntu2404
+              address: "{{ baseline_state.json.nodes[0].address }}"
+              port: 2222
+              configProfile:
+                activeConfigProfileUuid: config-test
+                activeInbounds:
+                  - {uuid: inbound-b}
+                  - {uuid: inbound-a}
+      changed_when: false
+
+    - name: Reconcile reordered inbound objects
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_remnanode
+
+    - name: Read reordered inbound state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: reordered_state
+      changed_when: false
+
+    - name: Require reordered inbound objects not to trigger PATCH
+      ansible.builtin.assert:
+        that: reordered_state.json.requests | selectattr('method', 'equalto', 'PATCH') | list | length == 0
+
+    - name: Arrange stale Remnawave node
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          nodes:
+            - uuid: existing-node
+              name: api-ubuntu2404
+              address: 192.0.2.99
+              port: 1111
+              configProfile:
+                activeConfigProfileUuid: old-profile
+                activeInbounds:
+                  - {uuid: inbound-b}
+                  - {uuid: inbound-a}
+      changed_when: false
+
+    - name: Reconcile stale Remnawave node by UUID
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_remnanode
+
+    - name: Read updated Remnawave state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: updated_state
+      changed_when: false
+
+    - name: Verify PATCH without duplicate node
+      ansible.builtin.assert:
+        that:
+          - updated_state.json.nodes | length == 1
+          - updated_state.json.nodes[0].uuid == 'existing-node'
+          - updated_state.json.nodes[0].port | int == 2222
+          - updated_state.json.requests | selectattr('method', 'equalto', 'PATCH') | list | length == 1
+          - updated_state.json.requests | selectattr('method', 'equalto', 'POST') | selectattr('path', 'equalto', '/api/nodes') | list | length == 0
+
+    - name: Arrange duplicate Remnawave nodes
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          nodes:
+            - {uuid: duplicate-a, name: api-ubuntu2404}
+            - {uuid: duplicate-b, name: api-ubuntu2404}
+      changed_when: false
+
+    - name: Require duplicate Remnawave rejection
+      block:
+        - name: Attempt duplicate Remnawave reconciliation
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: install_remnanode
+      rescue:
+        - name: Mark duplicate Remnawave records as rejected
+          ansible.builtin.set_fact:
+            duplicate_rw_rejected: true
+
+        - name: Read state after duplicate rejection
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8080/admin/state
+            return_content: true
+          register: duplicate_state
+          changed_when: false
+
+        - name: Verify duplicate rejection made no mutation
+          ansible.builtin.assert:
+            that:
+              - duplicate_state.json.nodes | length == 2
+              - duplicate_state.json.requests | selectattr('method', 'in', ['POST', 'PATCH']) | list | length == 0
+
+    - name: Require expected duplicate Remnawave rejection
+      ansible.builtin.assert:
+        that: duplicate_rw_rejected | default(false)
+
+    - name: Arrange existing node for forced secret rotation and port update
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          keygen_count: 40
+          nodes:
+            - uuid: rotate-node
+              name: api-ubuntu2404
+              address: api-ubuntu2404
+              port: 2222
+              configProfile:
+                activeConfigProfileUuid: config-test
+                activeInbounds:
+                  - {uuid: inbound-a}
+                  - {uuid: inbound-b}
+      changed_when: false
+
+    - name: Capture Remnanode container ID before rotation
+      ansible.builtin.command:
+        argv: [docker, inspect, -f, "{% raw %}{{.Id}}{% endraw %}", remnanode]
+      register: container_before_rotation
+      changed_when: false
+
+    - name: Read Remnanode environment before rotation
+      ansible.builtin.slurp:
+        src: /opt/remnanode/.env
+      register: env_before_rotation
+      no_log: true
+
+    - name: Rotate secret and update port
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_remnanode
+      vars:
+        force_reinstall: true
+        panel_control_port: 2333
+
+    - name: Capture Remnanode container ID after rotation
+      ansible.builtin.command:
+        argv: [docker, inspect, -f, "{% raw %}{{.Id}}{% endraw %}", remnanode]
+      register: container_after_rotation
+      changed_when: false
+
+    - name: Read rotated environment
+      ansible.builtin.slurp:
+        src: /opt/remnanode/.env
+      register: rotated_env
+      no_log: true
+
+    - name: Read Remnanode compose project after rotation
+      ansible.builtin.slurp:
+        src: /opt/remnanode/docker-compose.yml
+      register: rotated_compose
+
+    - name: Read Remnawave state after rotation
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: rotated_state
+      changed_when: false
+
+    - name: Probe updated Remnanode listener
+      ansible.builtin.wait_for:
+        host: 127.0.0.1
+        port: 2333
+        timeout: 10
+
+    - name: Verify rotation and port update
+      ansible.builtin.assert:
+        that:
+          - container_before_rotation.stdout != container_after_rotation.stdout
+          - env_before_rotation.content != rotated_env.content
+          - "'NODE_PORT=2333' in (rotated_env.content | b64decode)"
+          - "'SECRET_KEY=test-secret-0041' in (rotated_env.content | b64decode)"
+          - "'CUSTOM_CORE_URL=https://example.test/custom-core' in (rotated_env.content | b64decode)"
+          - "'.env' in (rotated_compose.content | b64decode)"
+          - rotated_state.json.nodes | length == 1
+          - rotated_state.json.nodes[0].uuid == 'rotate-node'
+          - rotated_state.json.nodes[0].port | int == 2333
+          - rotated_state.json.requests | selectattr('method', 'equalto', 'PATCH') | list | length == 1
+      no_log: true
+
+    - name: Arrange missing Cloudflare record
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body: {}
+      changed_when: false
+
+    - name: Create missing Cloudflare record
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: ensure_cloudflare_record
+      vars:
+        cf_dns_name: create.example.test
+
+    - name: Read Cloudflare create state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: cf_create_state
+      changed_when: false
+
+    - name: Verify Cloudflare POST
+      ansible.builtin.assert:
+        that:
+          - cf_create_state.json.dns_records | length == 1
+          - cf_create_state.json.requests | selectattr('method', 'equalto', 'POST') | list | length == 1
+
+    - name: Arrange unchanged Cloudflare record
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          dns_records:
+            - id: existing-dns
+              type: A
+              name: same.example.test
+              content: 198.51.100.10
+              ttl: 1
+              proxied: false
+      changed_when: false
+
+    - name: Reconcile unchanged Cloudflare record
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: ensure_cloudflare_record
+      vars:
+        cf_dns_name: same.example.test
+
+    - name: Read unchanged Cloudflare state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: cf_same_state
+      changed_when: false
+
+    - name: Verify unchanged Cloudflare record used GET only
+      ansible.builtin.assert:
+        that:
+          - cf_same_state.json.requests | rejectattr('method', 'equalto', 'GET') | list | length == 0
+
+    - name: Arrange stale Cloudflare record
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          dns_records:
+            - id: stale-dns
+              type: A
+              name: update.example.test
+              content: 192.0.2.55
+              ttl: 300
+              proxied: true
+      changed_when: false
+
+    - name: Update stale Cloudflare record
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: ensure_cloudflare_record
+      vars:
+        cf_dns_name: update.example.test
+
+    - name: Read updated Cloudflare state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: cf_update_state
+      changed_when: false
+
+    - name: Verify Cloudflare PUT by record ID
+      ansible.builtin.assert:
+        that:
+          - cf_update_state.json.dns_records[0].id == 'stale-dns'
+          - cf_update_state.json.dns_records[0].content == '198.51.100.10'
+          - cf_update_state.json.requests | selectattr('method', 'equalto', 'PUT') | list | length == 1
+
+    - name: Arrange duplicate Cloudflare records
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          dns_records:
+            - {id: dns-a, type: A, name: duplicate.example.test, content: 198.51.100.10, ttl: 1, proxied: false}
+            - {id: dns-b, type: A, name: duplicate.example.test, content: 198.51.100.10, ttl: 1, proxied: false}
+      changed_when: false
+
+    - name: Require duplicate Cloudflare rejection
+      block:
+        - name: Attempt duplicate Cloudflare reconciliation
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: ensure_cloudflare_record
+          vars:
+            cf_dns_name: duplicate.example.test
+      rescue:
+        - name: Mark duplicate Cloudflare records as rejected
+          ansible.builtin.set_fact:
+            duplicate_cf_rejected: true
+
+        - name: Read duplicate Cloudflare state
+          ansible.builtin.uri:
+            url: http://127.0.0.1:8080/admin/state
+            return_content: true
+          register: cf_duplicate_state
+          changed_when: false
+
+        - name: Verify duplicate DNS rejection made no mutation
+          ansible.builtin.assert:
+            that: cf_duplicate_state.json.requests | selectattr('method', 'in', ['POST', 'PUT']) | list | length == 0
+
+    - name: Require expected duplicate Cloudflare rejection
+      ansible.builtin.assert:
+        that: duplicate_cf_rejected | default(false)
+
+    - name: Arrange malformed Remnawave inbounds response
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          failures:
+            GET /api/config-profiles/config-test/inbounds:
+              status: 200
+              body:
+                response: {}
+      changed_when: false
+
+    - name: Capture Remnanode identity before rejected API responses
+      ansible.builtin.command:
+        argv: [docker, inspect, -f, "{% raw %}{{.Id}}{% endraw %}", remnanode]
+      register: container_before_api_errors
+      changed_when: false
+
+    - name: Require malformed Remnawave response rejection
+      block:
+        - name: Attempt reconciliation with malformed Remnawave response
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: install_remnanode
+      rescue:
+        - name: Mark malformed Remnawave response as rejected
+          ansible.builtin.set_fact:
+            malformed_rw_rejected: true
+
+    - name: Require expected malformed Remnawave rejection
+      ansible.builtin.assert:
+        that: malformed_rw_rejected | default(false)
+
+    - name: Arrange missing Remnawave nodes field
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          failures:
+            GET /api/nodes:
+              status: 200
+              body:
+                response: {}
+      changed_when: false
+
+    - name: Require missing Remnawave nodes field rejection
+      block:
+        - name: Attempt reconciliation with missing nodes field
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: install_remnanode
+      rescue:
+        - name: Mark missing Remnawave field as rejected
+          ansible.builtin.set_fact:
+            missing_rw_field_rejected: true
+
+    - name: Require expected missing Remnawave field rejection
+      ansible.builtin.assert:
+        that: missing_rw_field_rejected | default(false)
+
+    - name: Arrange unexpected Remnawave HTTP status
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          failures:
+            GET /api/config-profiles/config-test/inbounds:
+              status: 503
+              body:
+                error: unavailable
+      changed_when: false
+
+    - name: Require unexpected Remnawave HTTP status rejection
+      block:
+        - name: Attempt reconciliation after Remnawave HTTP error
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: install_remnanode
+      rescue:
+        - name: Mark Remnawave HTTP status as rejected
+          ansible.builtin.set_fact:
+            rw_http_error_rejected: true
+
+    - name: Require expected Remnawave HTTP rejection
+      ansible.builtin.assert:
+        that: rw_http_error_rejected | default(false)
+
+    - name: Capture Remnanode identity after rejected API responses
+      ansible.builtin.command:
+        argv: [docker, inspect, -f, "{% raw %}{{.Id}}{% endraw %}", remnanode]
+      register: container_after_api_errors
+      changed_when: false
+
+    - name: Require API validation errors before container reconciliation
+      ansible.builtin.assert:
+        that: container_before_api_errors.stdout == container_after_api_errors.stdout
+
+    - name: Arrange Cloudflare success false response
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          failures:
+            GET /client/v4/zones/testzone/dns_records:
+              status: 200
+              body:
+                success: false
+                result: []
+      changed_when: false
+
+    - name: Require Cloudflare success false rejection
+      block:
+        - name: Attempt failed Cloudflare lookup
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: ensure_cloudflare_record
+          vars:
+            cf_dns_name: failed.example.test
+      rescue:
+        - name: Mark Cloudflare error as rejected
+          ansible.builtin.set_fact:
+            cf_error_rejected: true
+
+    - name: Require expected Cloudflare error rejection
+      ansible.builtin.assert:
+        that: cf_error_rejected | default(false)
+
+    - name: Arrange malformed Cloudflare JSON
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          failures:
+            GET /client/v4/zones/testzone/dns_records:
+              status: 200
+              raw: '{not-json'
+      changed_when: false
+
+    - name: Require malformed Cloudflare JSON rejection
+      block:
+        - name: Attempt malformed Cloudflare lookup
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: ensure_cloudflare_record
+          vars:
+            cf_dns_name: malformed.example.test
+      rescue:
+        - name: Mark malformed Cloudflare JSON as rejected
+          ansible.builtin.set_fact:
+            cf_malformed_rejected: true
+
+    - name: Require expected malformed Cloudflare rejection
+      ansible.builtin.assert:
+        that: cf_malformed_rejected | default(false)
+
+    - name: Arrange Cloudflare HTTP error
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/reset
+        method: POST
+        body_format: json
+        body:
+          failures:
+            GET /client/v4/zones/testzone/dns_records:
+              status: 503
+              body:
+                success: false
+      changed_when: false
+
+    - name: Require Cloudflare HTTP error rejection
+      block:
+        - name: Attempt Cloudflare lookup returning HTTP error
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: ensure_cloudflare_record
+          vars:
+            cf_dns_name: unavailable.example.test
+      rescue:
+        - name: Mark Cloudflare HTTP error as rejected
+          ansible.builtin.set_fact:
+            cf_http_error_rejected: true
+
+    - name: Require expected Cloudflare HTTP rejection
+      ansible.builtin.assert:
+        that: cf_http_error_rejected | default(false)

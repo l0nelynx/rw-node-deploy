@@ -1,0 +1,6 @@
+---
+- name: Exercise role tag contract
+  hosts: all
+  become: true
+  roles:
+    - deploy-rw-by-lynx

@@ -17,6 +17,8 @@ service_key_path: "~/.ssh/id_ed25519"
 reality_domain: "{{ sub_mask }}.{{ main_domain }}"
 cf_dns_ttl: 1
 cf_dns_proxied: false
+cf_api_base_url: https://api.cloudflare.com/client/v4
+public_ip_lookup_url: https://api.ipify.org
 firewall_public_tcp_ports: [443, 8443]
 firewall_public_udp_ports: [443, 8443]
 firewall_blacklist_urls:

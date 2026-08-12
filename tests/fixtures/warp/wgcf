@@ -1,0 +1,30 @@
+#!/bin/sh
+set -eu
+ACCOUNT_FILE=/tmp/rw-test-wgcf-account
+case "${1:-}" in
+  status)
+    printf 'Account type: %s\n' "$(cat "$ACCOUNT_FILE" 2>/dev/null || printf free)"
+    ;;
+  update)
+    key="${3:-}"
+    case "$key" in
+      FAIL-*) exit 1 ;;
+      LIMITED-*) printf 'free\n' > "$ACCOUNT_FILE" ;;
+      *) printf 'unlimited\n' > "$ACCOUNT_FILE" ;;
+    esac
+    ;;
+  generate)
+    cat > /root/wgcf-profile.conf <<'EOF'
+[Interface]
+PrivateKey = test-private-key
+Address = 172.16.0.2/32, 2606:4700:110:8765::2/128
+DNS = 1.1.1.1
+MTU = 1280
+[Peer]
+PublicKey = test-public-key
+Endpoint = 162.159.192.1:2408
+AllowedIPs = 0.0.0.0/0
+EOF
+    ;;
+  *) exit 2 ;;
+esac

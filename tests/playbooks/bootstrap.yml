@@ -1,0 +1,11 @@
+---
+- name: Exercise SSH bootstrap task file
+  hosts: bootstrap_targets
+  gather_facts: false
+  serial: 1
+  any_errors_fatal: true
+  tasks:
+    - name: Import SSH bootstrap tasks
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_keys.yml

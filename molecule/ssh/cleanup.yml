@@ -1,0 +1,9 @@
+---
+- name: Cleanup SSH controller fixtures
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Remove temporary SSH fixture directory
+      ansible.builtin.file:
+        path: /tmp/rw-node-molecule-ssh
+        state: absent

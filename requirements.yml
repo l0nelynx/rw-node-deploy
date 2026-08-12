@@ -4,4 +4,6 @@ roles:
     version: main
 collections:
   - name: ansible.posix
+    version: 1.6.2
   - name: community.docker
+    version: 4.8.1

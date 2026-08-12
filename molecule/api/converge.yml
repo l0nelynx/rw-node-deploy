@@ -1,0 +1,27 @@
+---
+- name: Converge baseline API state
+  hosts: all
+  become: true
+  tasks:
+    - name: Install Docker for Remnanode API scenario
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_docker
+
+    - name: Inspect Remnanode fixture image
+      ansible.builtin.command:
+        argv: [docker, image, inspect, rw-test/remnanode:local]
+      register: fixture_image
+      changed_when: false
+      failed_when: false
+
+    - name: Build Remnanode fixture image
+      ansible.builtin.command:
+        argv: [docker, build, -t, rw-test/remnanode:local, /opt/rw-test/remnanode-stub]
+      when: fixture_image.rc != 0
+      changed_when: true
+
+    - name: Reconcile Remnanode baseline
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: install_remnanode

@@ -1,0 +1,8 @@
+-c constraints-test.txt
+ansible-core
+ansible-compat
+molecule
+molecule-plugins[docker]
+docker
+requests
+yamllint

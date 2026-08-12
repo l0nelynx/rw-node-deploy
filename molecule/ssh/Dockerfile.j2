@@ -1,0 +1,12 @@
+FROM {{ item.image }}
+ENV container=docker
+STOPSIGNAL SIGRTMIN+3
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y \
+      systemd systemd-sysv python3 python3-apt sudo openssh-server && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* && \
+    mkdir -p /run/sshd /root/.ssh && chmod 0700 /root/.ssh && \
+    systemctl enable ssh.service && \
+    systemctl mask dev-hugepages.mount sys-fs-fuse-connections.mount \
+      systemd-remount-fs.service getty@.service console-getty.service || true
+VOLUME ["/sys/fs/cgroup"]
+CMD ["/sbin/init"]

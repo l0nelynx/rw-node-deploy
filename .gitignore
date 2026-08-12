@@ -1,6 +1,7 @@
 /hosts
 /lynx
 .venv
+__pycache__/
 .idea
 install_keys.yml
 install_nginx.yml
@@ -9,5 +10,8 @@ hosts
 nginx_quick.sh
 whitelist.nft
 /warp_plus.json
+molecule/*/warp_plus.json
+molecule-*.log
+.molecule/
 /.idea/
 roles/warp_native/

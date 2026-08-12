@@ -20,13 +20,15 @@ WARP is intentionally limited to Debian-family hosts because the external
 ## Important defaults
 
 - `nginx_image: nginx:alpine`
-- `remnanode_image: ghcr.io/legiz-ru/remnanode-smux:latest`
+- `remnanode_image: remnawave/node:latest`
 - `custom_core_url`: URL custom Xray core; written as `CUSTOM_CORE_URL` to
   `/opt/remnanode/.env` before Remnanode is started
 - `docker_pull_policy: always`
 - `templates_repo_version: main`
 - `fake_site_force_regenerate: false`
 - `firewall_whitelist_path: "{{ playbook_dir }}/whitelist.nft"`
+- `cf_api_base_url: https://api.cloudflare.com/client/v4`
+- `public_ip_lookup_url: https://api.ipify.org`
 
 The role leaves `make_certs.yml` unchanged. Remnanode secrets are written to
 `/opt/remnanode/.env` with mode `0600`; API and WARP credentials are redacted from

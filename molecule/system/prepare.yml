@@ -1,0 +1,119 @@
+---
+- name: Prepare system scenario
+  hosts: all
+  become: true
+  vars:
+    project_dir: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}"
+  tasks:
+    - name: Create test fixture directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: '0755'
+      loop:
+        - /opt/rw-test/mock-api
+        - /opt/rw-test/remnanode-stub
+        - /opt/rw-test/template-repo
+        - /etc/docker
+
+    - name: Configure nested Docker storage
+      ansible.builtin.copy:
+        dest: /etc/docker/daemon.json
+        mode: '0644'
+        content: |
+          {"storage-driver":"vfs"}
+
+    - name: Copy mock API server
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/tests/fixtures/mock-api/server.py"
+        dest: /opt/rw-test/mock-api/server.py
+        mode: '0755'
+
+    - name: Install mock API service
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/rw-test-api.service
+        mode: '0644'
+        content: |
+          [Unit]
+          After=network.target
+          [Service]
+          ExecStart=/usr/bin/python3 /opt/rw-test/mock-api/server.py
+          Restart=always
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Start mock API
+      ansible.builtin.systemd:
+        name: rw-test-api.service
+        state: started
+        enabled: true
+        daemon_reload: true
+
+    - name: Wait for mock API
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        status_code: [200]
+      register: mock_api_ready
+      until: mock_api_ready.status == 200
+      retries: 15
+      delay: 1
+
+    - name: Copy Remnanode stub image context
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/tests/fixtures/remnanode-stub/"
+        dest: /opt/rw-test/remnanode-stub/
+        mode: preserve
+
+    - name: Copy fake-site fixture repository
+      ansible.builtin.copy:
+        src: "{{ project_dir }}/tests/fixtures/template-repo/"
+        dest: /opt/rw-test/template-repo/
+        mode: preserve
+
+    - name: Initialize fake-site Git repository
+      ansible.builtin.command:
+        argv: [git, init, -b, main]
+      args:
+        chdir: /opt/rw-test/template-repo
+        creates: /opt/rw-test/template-repo/.git
+
+    - name: Configure fixture Git identity
+      ansible.builtin.command:
+        argv: [git, config, "{{ item.key }}", "{{ item.value }}"]
+      args:
+        chdir: /opt/rw-test/template-repo
+      loop:
+        - {key: user.email, value: molecule@example.test}
+        - {key: user.name, value: Molecule}
+      changed_when: false
+
+    - name: Check fixture repository commit
+      ansible.builtin.command:
+        argv: [git, rev-parse, --verify, HEAD]
+      args:
+        chdir: /opt/rw-test/template-repo
+      register: fixture_commit
+      changed_when: false
+      failed_when: false
+
+    - name: Commit fake-site fixture
+      ansible.builtin.command:
+        argv: [git, add, .]
+      args:
+        chdir: /opt/rw-test/template-repo
+      when: fixture_commit.rc != 0
+      changed_when: true
+
+    - name: Create initial fake-site fixture commit
+      ansible.builtin.command:
+        argv: [git, commit, -m, initial-fixture]
+      args:
+        chdir: /opt/rw-test/template-repo
+      when: fixture_commit.rc != 0
+      changed_when: true
+
+    - name: Try to load BBR module for sysctl test
+      ansible.builtin.command:
+        argv: [modprobe, tcp_bbr]
+      changed_when: false
+      failed_when: false

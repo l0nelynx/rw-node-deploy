@@ -1,0 +1,17 @@
+---
+- name: Introduce and reconcile harmless API drift
+  hosts: all
+  become: true
+  tasks:
+    - name: Read current mock state
+      ansible.builtin.uri:
+        url: http://127.0.0.1:8080/admin/state
+        return_content: true
+      register: mock_state
+      changed_when: false
+
+    - name: Require baseline API state
+      ansible.builtin.assert:
+        that:
+          - mock_state.json.nodes | length == 1
+          - mock_state.json.dns_records | length == 3

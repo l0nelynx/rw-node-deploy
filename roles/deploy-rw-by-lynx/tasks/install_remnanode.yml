@@ -61,7 +61,12 @@
 
 - name: Validate Remnawave nodes response
   ansible.builtin.assert:
-    that: nodes_response.json.response is sequence
+    that:
+      - nodes_response.json is mapping
+      - nodes_response.json.response is defined
+      - nodes_response.json.response is sequence
+      - nodes_response.json.response is not string
+      - nodes_response.json.response is not mapping
     fail_msg: Remnawave did not return a valid v3 nodes response.
   no_log: true
 
@@ -101,7 +106,7 @@
   ansible.builtin.set_fact:
     remnanode_secret_key: >-
       {{ (remnanode_env.content | b64decode
-          | regex_findall('(?m)^SECRET_KEY=([^\\n]+)$') | first) | default('') }}
+          | regex_findall('(?m)^SECRET_KEY=([^\r\n]+)$') | first) | default('') }}
   when: remnanode_env_stat.stat.exists and not (force_reinstall | default(false) | bool)
   no_log: true
 
