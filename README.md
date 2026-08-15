@@ -60,6 +60,9 @@ parts with `--skip-tags`) instead of the whole playbook.
 # Full deploy (all tags)
 ansible-playbook -i hosts deploy.yml
 
+# Only Remnanode (autoupdate)
+ansible-playbook -i hosts deploy.yml --tags remnanode
+
 # Only the firewall
 ansible-playbook -i hosts deploy.yml --tags firewall
 
@@ -116,7 +119,7 @@ table inet filter {
     set whitelist_v4 {
         type ipv4_addr
         flags interval
-        elements = { 77.37.128.0/17, 1.2.3.0/24 }
+        elements = { 101.101.101.0/17, 1.2.3.0/24 }
     }
 }
 ```
