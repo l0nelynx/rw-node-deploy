@@ -1,5 +1,21 @@
+    chain drop_bad_tcp {
+{% if firewall_bad_tcp_log_rate | int > 0 %}
+        limit rate {{ firewall_bad_tcp_log_rate | int }}/minute burst {{ firewall_bad_tcp_log_burst | int }} packets log prefix "[rw badflags] " level info
+{% endif %}
+        counter drop
+    }
+
     chain prerouting {
         type filter hook prerouting priority -150; policy accept;
+        tcp flags & (fin|syn|rst|psh|ack|urg) == 0x0 jump drop_bad_tcp
+        tcp flags & (fin|syn|rst|psh|ack|urg) == (fin|syn|rst|psh|ack|urg) jump drop_bad_tcp
+        tcp flags & (fin|psh|urg) == (fin|psh|urg) jump drop_bad_tcp
+        tcp flags & (syn|fin) == (syn|fin) jump drop_bad_tcp
+        tcp flags & (syn|rst) == (syn|rst) jump drop_bad_tcp
+        tcp flags & (fin|rst) == (fin|rst) jump drop_bad_tcp
+        tcp flags & (fin|ack) == fin jump drop_bad_tcp
+        tcp flags & (psh|ack) == psh jump drop_bad_tcp
+        tcp flags & (ack|urg) == urg jump drop_bad_tcp
 {% if (whitelist_v4_check.rc | default(1)) == 0 %}
         ip saddr @whitelist_v4 accept
 {% endif %}
@@ -12,6 +28,10 @@
 
     chain input {
         type filter hook input priority 0; policy drop;
+        ip protocol icmp icmp type echo-request meter rw_icmp4 { ip saddr limit rate {{ firewall_icmp_echo_rate | int }}/second burst {{ firewall_icmp_echo_burst | int }} packets } accept
+        ip protocol icmp icmp type echo-request counter drop
+        icmpv6 type echo-request meter rw_icmp6 { ip6 saddr limit rate {{ firewall_icmp_echo_rate | int }}/second burst {{ firewall_icmp_echo_burst | int }} packets } accept
+        icmpv6 type echo-request counter drop
         ct state established,related accept
         ct state invalid drop
         iif lo accept
@@ -29,8 +49,8 @@
 {% if firewall_public_udp_ports | length > 0 %}
         udp dport { {{ firewall_public_udp_ports | map('string') | join(', ') }} } accept
 {% endif %}
-        icmp type echo-request accept
-        icmpv6 type { echo-request, nd-neighbor-solicit, nd-neighbor-advert, nd-router-advert, nd-router-solicit } accept
+        ip protocol icmp icmp type { destination-unreachable, time-exceeded, parameter-problem } accept
+        icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert, mld-listener-query, mld-listener-report, mld-listener-done } accept
     }
 
     chain forward {

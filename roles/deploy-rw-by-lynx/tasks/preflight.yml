@@ -38,6 +38,43 @@
     fail_msg: Firewall public ports must be integers in the range 1-65535.
   loop: "{{ firewall_public_tcp_ports + firewall_public_udp_ports }}"
 
+- name: Assert firewall safety limits
+  ansible.builtin.assert:
+    that:
+      - (item.value | string) is match('^[0-9]+$')
+      - item.value | int >= item.minimum
+      - item.value | int <= item.maximum
+    fail_msg: >-
+      {{ item.name }} must be an integer in the range
+      {{ item.minimum }}-{{ item.maximum }}.
+  loop:
+    - name: firewall_icmp_echo_rate
+      value: "{{ firewall_icmp_echo_rate }}"
+      minimum: 1
+      maximum: 1000
+    - name: firewall_icmp_echo_burst
+      value: "{{ firewall_icmp_echo_burst }}"
+      minimum: 1
+      maximum: 10000
+    - name: firewall_bad_tcp_log_rate
+      value: "{{ firewall_bad_tcp_log_rate }}"
+      minimum: 0
+      maximum: 60
+    - name: firewall_bad_tcp_log_burst
+      value: "{{ firewall_bad_tcp_log_burst }}"
+      minimum: 1
+      maximum: 100
+    - name: firewall_lock_timeout
+      value: "{{ firewall_lock_timeout }}"
+      minimum: 1
+      maximum: 300
+    - name: firewall_rollback_timeout
+      value: "{{ firewall_rollback_timeout }}"
+      minimum: 30
+      maximum: 600
+  loop_control:
+    label: "{{ item.name }}"
+
 - name: Reject WARP on unsupported operating systems
   ansible.builtin.assert:
     that: ansible_facts.os_family == 'Debian'

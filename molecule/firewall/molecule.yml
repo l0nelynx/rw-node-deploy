@@ -39,6 +39,8 @@ provisioner:
           v4: file:///opt/rw-test/firewall/blacklist-v4.nft
           v6: file:///opt/rw-test/firewall/blacklist-v6.nft
         firewall_whitelist_path: "{{ lookup('env', 'MOLECULE_PROJECT_DIRECTORY') }}/whitelist_example.nft"
+        firewall_lock_timeout: 2
+        firewall_rollback_timeout: 30
 verifier:
   name: ansible
 scenario:

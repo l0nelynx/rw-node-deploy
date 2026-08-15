@@ -20,8 +20,17 @@
           - "'2001:db8:ffff::10' in nft_ruleset.stdout"
           - "'443' in nft_ruleset.stdout"
           - "'8443' in nft_ruleset.stdout"
+          - "'chain drop_bad_tcp' in nft_ruleset.stdout"
+          - "'limit rate 5/minute burst 10 packets' in nft_ruleset.stdout"
+          - "'log prefix \"[rw badflags] \"' in nft_ruleset.stdout"
+          - "'meter rw_icmp4' in nft_ruleset.stdout"
+          - "'meter rw_icmp6' in nft_ruleset.stdout"
+          - "'packet-too-big' in nft_ruleset.stdout"
+          - "'destination-unreachable' in nft_ruleset.stdout"
+          - nft_ruleset.stdout.find('jump drop_bad_tcp') >= 0
           - nft_ruleset.stdout.find('@whitelist_v4') >= 0
           - nft_ruleset.stdout.find('@blacklist_v4') >= 0
+          - nft_ruleset.stdout.find('jump drop_bad_tcp') < nft_ruleset.stdout.find('@whitelist_v4')
           - nft_ruleset.stdout.find('@whitelist_v4') < nft_ruleset.stdout.find('@blacklist_v4')
           - nft_ruleset.stdout.find('@whitelist_v6') >= 0
           - nft_ruleset.stdout.find('@blacklist_v6') >= 0
@@ -43,6 +52,30 @@
           - item.stat.exists
           - item.stat.mode == item.item.mode
       loop: "{{ firewall_paths.results }}"
+
+    - name: Find armed or leftover firewall rollback files
+      ansible.builtin.find:
+        paths: /var/lib/rw-node-firewall
+        patterns: rollback-*
+      register: firewall_rollback_files
+
+    - name: List active firewall rollback timers
+      ansible.builtin.command:
+        argv:
+          - systemctl
+          - list-units
+          - --type=timer
+          - --state=active
+          - --no-legend
+          - rw-node-firewall-rollback-*.timer
+      register: firewall_rollback_timers
+      changed_when: false
+
+    - name: Require successful converge to disarm firewall rollback
+      ansible.builtin.assert:
+        that:
+          - firewall_rollback_files.matched == 0
+          - firewall_rollback_timers.stdout | trim == ''
 
     - name: Verify Docker daemon survived full ruleset replacement
       ansible.builtin.command:
@@ -115,6 +148,10 @@
         PANEL_PID=$!
         wait_for_listener 443 "$SERVER_PID" /tmp/rw-firewall-http.log
         wait_for_listener 2222 "$PANEL_PID" /tmp/rw-firewall-panel.log
+        ip netns exec rw-firewall-test ping -c 2 -W 1 198.51.100.1 >/dev/null || {
+          echo 'rate-limited IPv4 echo request failed' >&2
+          exit 1
+        }
         ip netns exec rw-firewall-test nc -z -w 2 198.51.100.1 443 || {
           echo 'whitelisted IPv4 source could not reach public port' >&2
           cat /tmp/rw-firewall-http.log >&2
@@ -170,6 +207,10 @@
         PANEL_PID=$!
         wait_for_listener 443 "$SERVER_PID" /tmp/rw-firewall-http-v6.log
         wait_for_listener 2222 "$PANEL_PID" /tmp/rw-firewall-panel-v6.log
+        ip netns exec rw-firewall-test ping -6 -c 2 -W 1 2001:db8:ffff::1 >/dev/null || {
+          echo 'rate-limited IPv6 echo request failed' >&2
+          exit 1
+        }
         ip netns exec rw-firewall-test nc -6 -z -w 2 2001:db8:ffff::1 443 || {
           echo 'whitelisted IPv6 source could not reach public port' >&2
           cat /tmp/rw-firewall-http-v6.log >&2

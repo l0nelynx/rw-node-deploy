@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "$#" -ne 8 ]]; then
+    echo "usage: $0 NATIVE_RULESET IPTABLES_RULESET IP6TABLES_RULESET PREVIOUS_CONFIG MISSING_MARKER ENABLED_STATE FIRED_MARKER LOCK_TIMEOUT" >&2
+    exit 2
+fi
+
+live_ruleset="$1"
+iptables_ruleset="$2"
+ip6tables_ruleset="$3"
+previous_config="$4"
+missing_marker="$5"
+enabled_state="$6"
+fired_marker="$7"
+lock_timeout="$8"
+
+[[ -s "$live_ruleset" ]] || {
+    echo "rollback ruleset is missing or empty: $live_ruleset" >&2
+    exit 1
+}
+[[ -f "$enabled_state" ]] || {
+    echo "rollback service state is missing: $enabled_state" >&2
+    exit 1
+}
+[[ -f "$iptables_ruleset" && -f "$ip6tables_ruleset" ]] || {
+    echo "rollback iptables state is missing" >&2
+    exit 1
+}
+[[ "$lock_timeout" =~ ^[0-9]+$ ]] || {
+    echo "rollback lock timeout is invalid" >&2
+    exit 2
+}
+
+install -D -m 0600 /dev/null "$fired_marker"
+printf 'started=%s\n' "$(date -Is)" > "$fired_marker"
+
+exec 9>/run/lock/rw-node-firewall.lock
+flock -w "$lock_timeout" 9
+
+/usr/sbin/nft -f "$live_ruleset"
+/usr/sbin/iptables-restore < "$iptables_ruleset"
+/usr/sbin/ip6tables-restore < "$ip6tables_ruleset"
+if [[ -f "$previous_config" ]]; then
+    install -D -m 0600 "$previous_config" /etc/nftables.conf
+elif [[ -f "$missing_marker" ]]; then
+    rm -f /etc/nftables.conf
+else
+    echo "rollback persistence state is missing" >&2
+    exit 1
+fi
+
+case "$(cat "$enabled_state")" in
+    enabled|linked|linked-runtime)
+        systemctl unmask nftables.service >/dev/null 2>&1 || true
+        systemctl enable nftables.service >/dev/null
+        ;;
+    enabled-runtime)
+        systemctl unmask nftables.service >/dev/null 2>&1 || true
+        systemctl enable --runtime nftables.service >/dev/null
+        ;;
+    masked)
+        systemctl mask nftables.service >/dev/null
+        ;;
+    masked-runtime)
+        systemctl mask --runtime nftables.service >/dev/null
+        ;;
+    *)
+        systemctl unmask nftables.service >/dev/null 2>&1 || true
+        systemctl disable nftables.service >/dev/null 2>&1 || true
+        ;;
+esac
+
+if systemctl is-active --quiet docker.service; then
+    systemctl restart docker.service
+fi
+
+printf 'completed=%s\n' "$(date -Is)" >> "$fired_marker"
+rm -f \
+    "$live_ruleset" \
+    "$iptables_ruleset" \
+    "$ip6tables_ruleset" \
+    "$previous_config" \
+    "$missing_marker" \
+    "$enabled_state"

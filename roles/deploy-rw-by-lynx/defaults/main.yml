@@ -25,6 +25,12 @@ firewall_blacklist_urls:
   v4: https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v4.nft
   v6: https://raw.githubusercontent.com/C24Be/AS_Network_List/main/blacklists_nftables/blacklist-v6.nft
 firewall_whitelist_path: "{{ playbook_dir }}/whitelist.nft"
+firewall_icmp_echo_rate: 10
+firewall_icmp_echo_burst: 20
+firewall_bad_tcp_log_rate: 5
+firewall_bad_tcp_log_burst: 10
+firewall_lock_timeout: 30
+firewall_rollback_timeout: 120
 
 # WARP watchdog: как часто (в минутах) проверять свежесть handshake интерфейса warp.
 # Переопределяется в inventory (per-host или в [all:vars]).

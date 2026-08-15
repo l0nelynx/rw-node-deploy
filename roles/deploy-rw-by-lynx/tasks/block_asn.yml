@@ -1,7 +1,7 @@
 ---
-- name: Install nftables
+- name: Install firewall runtime dependencies
   ansible.builtin.package:
-    name: nftables
+    name: [nftables, util-linux]
     state: present
 
 - name: Stop and disable UFW when installed
@@ -22,156 +22,304 @@
     state: directory
     mode: '0700'
 
-- name: Check for controller-side whitelist
-  ansible.builtin.stat:
-    path: "{{ firewall_whitelist_path }}"
-  delegate_to: localhost
-  become: false
-  register: firewall_whitelist_stat
-
-- name: Copy controller whitelist when present
-  ansible.builtin.copy:
-    src: "{{ firewall_whitelist_path }}"
-    dest: /var/lib/rw-node-firewall/whitelist.nft.download
-    mode: '0600'
-  when: firewall_whitelist_stat.stat.exists
-
-- name: Remove cached whitelist when controller whitelist is absent
-  ansible.builtin.file:
-    path: /var/lib/rw-node-firewall/whitelist.nft.download
-    state: absent
-  when: not firewall_whitelist_stat.stat.exists
-
-- name: Download candidate IPv4 ASN blacklist
-  ansible.builtin.get_url:
-    url: "{{ firewall_blacklist_urls.v4 }}"
-    dest: /var/lib/rw-node-firewall/blacklist-v4.nft.download
-    mode: '0600'
-    force: true
-    timeout: 30
-
-- name: Download candidate IPv6 ASN blacklist
-  ansible.builtin.get_url:
-    url: "{{ firewall_blacklist_urls.v6 }}"
-    dest: /var/lib/rw-node-firewall/blacklist-v6.nft.download
-    mode: '0600'
-    force: true
-    timeout: 30
-
-- name: Normalize panel control source addresses
-  ansible.builtin.set_fact:
-    firewall_panel_sources: >-
-      {{ panel_control_ip if (panel_control_ip is defined and panel_control_ip is sequence and panel_control_ip is not string)
-         else ([panel_control_ip] if panel_control_ip is defined and panel_control_ip | length > 0 else []) }}
-
-- name: Validate panel control source addresses
-  ansible.builtin.assert:
-    that: >-
-      item is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
-      or item is match('^[0-9A-Fa-f:]+$')
-    fail_msg: panel_control_ip contains an invalid IP address.
-  loop: "{{ firewall_panel_sources }}"
-
-- name: Split panel control source addresses by address family
-  ansible.builtin.set_fact:
-    firewall_panel_ipv4: "{{ firewall_panel_sources | select('match', '^([0-9]{1,3}\\.){3}[0-9]{1,3}$') | list }}"
-    firewall_panel_ipv6: "{{ firewall_panel_sources | select('search', ':') | list }}"
-
-- name: Detect IPv4 whitelist set
-  ansible.builtin.command:
-    argv: [grep, -Eq, 'set[[:space:]]+whitelist_v4', /var/lib/rw-node-firewall/whitelist.nft.download]
-  register: whitelist_v4_check
-  changed_when: false
-  failed_when: false
-  when: firewall_whitelist_stat.stat.exists
-
-- name: Detect IPv6 whitelist set
-  ansible.builtin.command:
-    argv: [grep, -Eq, 'set[[:space:]]+whitelist_v6', /var/lib/rw-node-firewall/whitelist.nft.download]
-  register: whitelist_v6_check
-  changed_when: false
-  failed_when: false
-  when: firewall_whitelist_stat.stat.exists
-
-- name: Render managed inet filter chains
+- name: Install firewall rollback helper
   ansible.builtin.template:
-    src: rw-node-firewall-rules.nft.j2
-    dest: /var/lib/rw-node-firewall/rules.nft
-    mode: '0600'
+    src: rw-node-firewall-rollback.sh.j2
+    dest: /usr/local/sbin/rw-node-firewall-rollback
+    mode: '0755'
 
-- name: Validate and apply complete managed nftables ruleset
-  ansible.builtin.shell: |
-    set -euo pipefail
-    WORKDIR="$(mktemp -d)"
-    trap 'rm -rf "$WORKDIR"' EXIT
-    CANDIDATE="$WORKDIR/nftables.conf"
+- name: Create isolated firewall staging directory
+  ansible.builtin.tempfile:
+    path: /var/lib/rw-node-firewall
+    prefix: staging-
+    state: directory
+  register: firewall_stage
 
-    extract_filter_body() {
-      awk '
-        /^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{/ {
-          inside=1; depth=1; next
+- name: Reconcile complete managed firewall ruleset
+  block:
+    - name: Check for controller-side whitelist
+      ansible.builtin.stat:
+        path: "{{ firewall_whitelist_path }}"
+      delegate_to: localhost
+      become: false
+      register: firewall_whitelist_stat
+
+    - name: Copy controller whitelist to isolated staging
+      ansible.builtin.copy:
+        src: "{{ firewall_whitelist_path }}"
+        dest: "{{ firewall_stage.path }}/whitelist.nft"
+        mode: '0600'
+      when: firewall_whitelist_stat.stat.exists
+
+    - name: Download candidate IPv4 ASN blacklist to isolated staging
+      ansible.builtin.get_url:
+        url: "{{ firewall_blacklist_urls.v4 }}"
+        dest: "{{ firewall_stage.path }}/blacklist-v4.nft"
+        mode: '0600'
+        force: true
+        timeout: 30
+
+    - name: Download candidate IPv6 ASN blacklist to isolated staging
+      ansible.builtin.get_url:
+        url: "{{ firewall_blacklist_urls.v6 }}"
+        dest: "{{ firewall_stage.path }}/blacklist-v6.nft"
+        mode: '0600'
+        force: true
+        timeout: 30
+
+    - name: Normalize panel control source addresses
+      ansible.builtin.set_fact:
+        firewall_panel_sources: >-
+          {{ panel_control_ip if (panel_control_ip is defined and panel_control_ip is sequence and panel_control_ip is not string)
+             else ([panel_control_ip] if panel_control_ip is defined and panel_control_ip | length > 0 else []) }}
+
+    - name: Validate panel control source addresses
+      ansible.builtin.assert:
+        that: >-
+          item is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+          or item is match('^[0-9A-Fa-f:]+$')
+        fail_msg: panel_control_ip contains an invalid IP address.
+      loop: "{{ firewall_panel_sources }}"
+
+    - name: Split panel control source addresses by address family
+      ansible.builtin.set_fact:
+        firewall_panel_ipv4: "{{ firewall_panel_sources | select('match', '^([0-9]{1,3}\\.){3}[0-9]{1,3}$') | list }}"
+        firewall_panel_ipv6: "{{ firewall_panel_sources | select('search', ':') | list }}"
+
+    - name: Detect IPv4 whitelist set
+      ansible.builtin.command:
+        argv: [grep, -Eq, 'set[[:space:]]+whitelist_v4', "{{ firewall_stage.path }}/whitelist.nft"]
+      register: whitelist_v4_check
+      changed_when: false
+      failed_when: false
+      when: firewall_whitelist_stat.stat.exists
+
+    - name: Detect IPv6 whitelist set
+      ansible.builtin.command:
+        argv: [grep, -Eq, 'set[[:space:]]+whitelist_v6', "{{ firewall_stage.path }}/whitelist.nft"]
+      register: whitelist_v6_check
+      changed_when: false
+      failed_when: false
+      when: firewall_whitelist_stat.stat.exists
+
+    - name: Render managed inet filter chains to isolated staging
+      ansible.builtin.template:
+        src: rw-node-firewall-rules.nft.j2
+        dest: "{{ firewall_stage.path }}/rules.nft"
+        mode: '0600'
+
+    - name: Assemble and validate complete firewall candidate
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        STAGE={{ firewall_stage.path | quote }}
+        CANDIDATE="$STAGE/nftables.conf"
+
+        extract_filter_body() {
+          awk '
+            /^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{/ {
+              inside=1; depth=1; next
+            }
+            inside {
+              opens=gsub(/\{/, "{")
+              closes=gsub(/\}/, "}")
+              depth += opens - closes
+              if (depth == 0) { exit }
+              print
+            }
+          ' "$1"
         }
-        inside {
-          opens=gsub(/\{/, "{")
-          closes=gsub(/\}/, "}")
-          depth += opens - closes
-          if (depth == 0) { exit }
-          print
+
+        for fragment in "$STAGE/blacklist-v4.nft" "$STAGE/blacklist-v6.nft"; do
+          test -s "$fragment"
+          grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{' "$fragment"
+          ! grep -Eq '^[[:space:]]*chain[[:space:]]' "$fragment"
+        done
+        grep -Eq 'set[[:space:]]+blacklist_v4' "$STAGE/blacklist-v4.nft"
+        grep -Eq 'set[[:space:]]+blacklist_v6' "$STAGE/blacklist-v6.nft"
+
+        if [ -f "$STAGE/whitelist.nft" ]; then
+          grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{' "$STAGE/whitelist.nft"
+          ! grep -Eq '^[[:space:]]*chain[[:space:]]' "$STAGE/whitelist.nft"
+        fi
+
+        {
+          printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\ntable inet filter {\n'
+          extract_filter_body "$STAGE/blacklist-v4.nft"
+          extract_filter_body "$STAGE/blacklist-v6.nft"
+          if [ -f "$STAGE/whitelist.nft" ]; then
+            extract_filter_body "$STAGE/whitelist.nft"
+          fi
+          cat "$STAGE/rules.nft"
+          printf '}\n'
+        } > "$CANDIDATE"
+
+        nft -c -f "$CANDIDATE"
+      args:
+        executable: /bin/bash
+      changed_when: false
+
+    - name: Derive unique firewall rollback identifier
+      ansible.builtin.set_fact:
+        firewall_run_id: >-
+          {{ firewall_stage.path | basename | regex_replace('[^A-Za-z0-9]', '-') }}
+
+    - name: Define firewall rollback artifacts
+      ansible.builtin.set_fact:
+        firewall_rollback_unit: "rw-node-firewall-rollback-{{ firewall_run_id }}"
+        firewall_rollback_live: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.nft"
+        firewall_rollback_iptables: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.iptables"
+        firewall_rollback_ip6tables: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.ip6tables"
+        firewall_rollback_previous: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.conf"
+        firewall_rollback_missing: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.missing"
+        firewall_rollback_enabled: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.enabled"
+        firewall_rollback_fired: "/var/lib/rw-node-firewall/rollback-{{ firewall_run_id }}.fired"
+
+    - name: Arm rollback and apply complete managed nftables ruleset
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        STAGE={{ firewall_stage.path | quote }}
+        UNIT={{ firewall_rollback_unit | quote }}
+        LIVE={{ firewall_rollback_live | quote }}
+        IPTABLES={{ firewall_rollback_iptables | quote }}
+        IP6TABLES={{ firewall_rollback_ip6tables | quote }}
+        PREVIOUS={{ firewall_rollback_previous | quote }}
+        MISSING={{ firewall_rollback_missing | quote }}
+        ENABLED={{ firewall_rollback_enabled | quote }}
+        FIRED={{ firewall_rollback_fired | quote }}
+        ARMED=0
+
+        cleanup_unarmed() {
+          if [ "$ARMED" -eq 0 ]; then
+            rm -f "$LIVE" "$IPTABLES" "$IP6TABLES" \
+              "$PREVIOUS" "$MISSING" "$ENABLED" "$FIRED"
+          fi
         }
-      ' "$1"
-    }
+        trap cleanup_unarmed EXIT
 
-    for fragment in \
-      /var/lib/rw-node-firewall/blacklist-v4.nft.download \
-      /var/lib/rw-node-firewall/blacklist-v6.nft.download; do
-      test -s "$fragment"
-      grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{' "$fragment"
-      ! grep -Eq '^[[:space:]]*chain[[:space:]]' "$fragment"
-    done
-    grep -Eq 'set[[:space:]]+blacklist_v4' /var/lib/rw-node-firewall/blacklist-v4.nft.download
-    grep -Eq 'set[[:space:]]+blacklist_v6' /var/lib/rw-node-firewall/blacklist-v6.nft.download
+        exec 9>/run/lock/rw-node-firewall.lock
+        if ! flock -w {{ firewall_lock_timeout | int }} 9; then
+          echo 'timed out waiting for the managed firewall lock' >&2
+          exit 75
+        fi
 
-    if [ -f /var/lib/rw-node-firewall/whitelist.nft.download ]; then
-      grep -Eq '^[[:space:]]*table[[:space:]]+inet[[:space:]]+filter[[:space:]]*\{' /var/lib/rw-node-firewall/whitelist.nft.download
-      ! grep -Eq '^[[:space:]]*chain[[:space:]]' /var/lib/rw-node-firewall/whitelist.nft.download
-    fi
+        rm -f "$LIVE" "$IPTABLES" "$IP6TABLES" \
+          "$PREVIOUS" "$MISSING" "$ENABLED" "$FIRED"
+        printf 'flush ruleset\n' > "$LIVE"
+        while read -r keyword family table_name; do
+          [ "$keyword" = table ] || continue
+          nft list table "$family" "$table_name" \
+            > "$STAGE/rollback-table.nft" \
+            2> "$STAGE/rollback-table.err"
+          if ! grep -q 'managed by iptables-nft' "$STAGE/rollback-table.err"; then
+            cat "$STAGE/rollback-table.nft" >> "$LIVE"
+          fi
+        done < <(nft list tables)
+        nft -c -f "$LIVE"
+        iptables-save > "$IPTABLES"
+        ip6tables-save > "$IP6TABLES"
 
-    {
-      printf '#!/usr/sbin/nft -f\n\nflush ruleset\n\ntable inet filter {\n'
-      extract_filter_body /var/lib/rw-node-firewall/blacklist-v4.nft.download
-      extract_filter_body /var/lib/rw-node-firewall/blacklist-v6.nft.download
-      if [ -f /var/lib/rw-node-firewall/whitelist.nft.download ]; then
-        extract_filter_body /var/lib/rw-node-firewall/whitelist.nft.download
-      fi
-      cat /var/lib/rw-node-firewall/rules.nft
-      printf '}\n'
-    } > "$CANDIDATE"
+        if [ -f /etc/nftables.conf ]; then
+          install -m 0600 /etc/nftables.conf "$PREVIOUS"
+        else
+          install -m 0600 /dev/null "$MISSING"
+        fi
+        (systemctl is-enabled nftables.service 2>/dev/null || true) > "$ENABLED"
 
-    nft -c -f "$CANDIDATE"
-    install -D -m 0600 "$CANDIDATE" /etc/nftables.conf.new
-    nft -f "$CANDIDATE"
-    mv /etc/nftables.conf.new /etc/nftables.conf
-    install -m 0600 /var/lib/rw-node-firewall/blacklist-v4.nft.download /var/lib/rw-node-firewall/blacklist-v4.nft
-    install -m 0600 /var/lib/rw-node-firewall/blacklist-v6.nft.download /var/lib/rw-node-firewall/blacklist-v6.nft
-    echo applied
-  args:
-    executable: /bin/bash
-  register: firewall_apply
-  changed_when: true
+        systemd-run --quiet \
+          --unit="$UNIT" \
+          --on-active={{ firewall_rollback_timeout | int }}s \
+          --timer-property=AccuracySec=1s \
+          /usr/local/sbin/rw-node-firewall-rollback \
+          "$LIVE" "$IPTABLES" "$IP6TABLES" \
+          "$PREVIOUS" "$MISSING" "$ENABLED" "$FIRED" \
+          {{ firewall_lock_timeout | int }}
+        ARMED=1
 
-- name: Enable managed nftables rules at boot
-  ansible.builtin.systemd:
-    name: nftables.service
-    state: started
-    enabled: true
+        nft -f "$STAGE/nftables.conf"
+        install -D -m 0600 "$STAGE/nftables.conf" /etc/nftables.conf
+        install -m 0600 "$STAGE/blacklist-v4.nft" /var/lib/rw-node-firewall/blacklist-v4.nft
+        install -m 0600 "$STAGE/blacklist-v6.nft" /var/lib/rw-node-firewall/blacklist-v6.nft
+        if [ -f "$STAGE/whitelist.nft" ]; then
+          install -m 0600 "$STAGE/whitelist.nft" /var/lib/rw-node-firewall/whitelist.nft.download
+        else
+          rm -f /var/lib/rw-node-firewall/whitelist.nft.download
+        fi
+        echo applied
+        trap - EXIT
+      args:
+        executable: /bin/bash
+      register: firewall_apply
+      changed_when: true
 
-- name: Rebuild Docker nftables rules after a full firewall replacement
-  ansible.builtin.systemd:
-    name: docker.service
-    state: restarted
-  when: firewall_apply.changed
+    - name: Enable managed nftables rules at boot
+      ansible.builtin.systemd:
+        name: nftables.service
+        state: started
+        enabled: true
 
-- name: Verify SSH remains reachable after firewall reconciliation
-  ansible.builtin.wait_for_connection:
-    timeout: 60
-  when: firewall_apply.changed
+    - name: Rebuild Docker nftables rules after a full firewall replacement
+      ansible.builtin.systemd:
+        name: docker.service
+        state: restarted
+
+    - name: Close the existing persistent SSH connection
+      ansible.builtin.meta: reset_connection
+
+    - name: Verify a new SSH connection after firewall reconciliation
+      ansible.builtin.wait_for_connection:
+        timeout: "{{ (firewall_rollback_timeout | int) + 60 }}"
+
+    - name: Disarm firewall safety rollback
+      ansible.builtin.shell: |
+        set -euo pipefail
+        UNIT={{ firewall_rollback_unit | quote }}
+        systemctl stop "$UNIT.timer" 2>/dev/null || true
+        for _attempt in $(seq 1 30); do
+          if ! systemctl is-active --quiet "$UNIT.service"; then
+            break
+          fi
+          sleep 1
+        done
+        if systemctl is-active --quiet "$UNIT.service"; then
+          echo 'firewall rollback service did not finish' >&2
+          exit 1
+        fi
+        if systemctl is-failed --quiet "$UNIT.service"; then
+          echo 'firewall rollback service failed' >&2
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Check whether firewall safety rollback fired
+      ansible.builtin.stat:
+        path: "{{ firewall_rollback_fired }}"
+      register: firewall_rollback_result
+
+    - name: Require the new firewall to preserve SSH connectivity
+      ansible.builtin.assert:
+        that: not firewall_rollback_result.stat.exists
+        fail_msg: >-
+          The safety timer restored the previous firewall because a new SSH
+          connection could not be confirmed. The candidate was not accepted.
+
+    - name: Remove disarmed firewall rollback artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - "{{ firewall_rollback_live }}"
+        - "{{ firewall_rollback_iptables }}"
+        - "{{ firewall_rollback_ip6tables }}"
+        - "{{ firewall_rollback_previous }}"
+        - "{{ firewall_rollback_missing }}"
+        - "{{ firewall_rollback_enabled }}"
+        - "{{ firewall_rollback_fired }}"
+  always:
+    - name: Remove isolated firewall staging directory
+      ansible.builtin.file:
+        path: "{{ firewall_stage.path }}"
+        state: absent

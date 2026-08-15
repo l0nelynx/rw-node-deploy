@@ -23,9 +23,84 @@
       ansible.builtin.assert:
         that: repeated_firewall_config.stat.checksum == (baseline_checksum.content | b64decode | trim)
 
+    - name: Capture managed live rules before lock contention
+      ansible.builtin.command:
+        argv: [nft, --stateless, list, table, inet, filter]
+      register: rules_before_lock
+      changed_when: false
+
+    - name: Hold the managed firewall lock
+      ansible.builtin.shell: |
+        set -euo pipefail
+        echo "$$" > /tmp/rw-firewall-lock-holder.pid
+        exec 9>/run/lock/rw-node-firewall.lock
+        flock 9
+        touch /tmp/rw-firewall-lock-holder.ready
+        exec sleep 60
+      args:
+        executable: /bin/bash
+      async: 65
+      poll: 0
+      register: firewall_lock_holder
+      changed_when: true
+
+    - name: Wait for the firewall lock holder
+      ansible.builtin.wait_for:
+        path: /tmp/rw-firewall-lock-holder.ready
+        state: present
+        timeout: 10
+
+    - name: Require lock contention to reject a concurrent apply
+      block:
+        - name: Attempt a concurrent managed firewall apply
+          ansible.builtin.include_role:
+            name: deploy-rw-by-lynx
+            tasks_from: block_asn
+          vars:
+            firewall_lock_timeout: 1
+      rescue:
+        - name: Mark concurrent firewall apply as rejected
+          ansible.builtin.set_fact:
+            firewall_lock_rejected: true
+      always:
+        - name: Stop firewall lock holder
+          ansible.builtin.shell: |
+            if [ -s /tmp/rw-firewall-lock-holder.pid ]; then
+              kill "$(cat /tmp/rw-firewall-lock-holder.pid)" 2>/dev/null || true
+            fi
+            rm -f /tmp/rw-firewall-lock-holder.pid /tmp/rw-firewall-lock-holder.ready
+          args:
+            executable: /bin/bash
+          changed_when: true
+
+        - name: Remove firewall lock holder async metadata
+          ansible.builtin.async_status:
+            jid: "{{ firewall_lock_holder.ansible_job_id }}"
+            mode: cleanup
+          failed_when: false
+
+    - name: Capture managed live rules after lock contention
+      ansible.builtin.command:
+        argv: [nft, --stateless, list, table, inet, filter]
+      register: rules_after_lock
+      changed_when: false
+
+    - name: Read firewall configuration after lock contention
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: config_after_lock
+
+    - name: Require lock contention to preserve firewall state
+      ansible.builtin.assert:
+        that:
+          - firewall_lock_rejected | default(false)
+          - rules_after_lock.stdout == rules_before_lock.stdout
+          - config_after_lock.stat.checksum == (baseline_checksum.content | b64decode | trim)
+
     - name: Capture live ruleset before invalid update
       ansible.builtin.command:
-        argv: [nft, list, ruleset]
+        argv: [nft, --stateless, list, ruleset]
       register: rules_before_invalid
       changed_when: false
 
@@ -46,7 +121,7 @@
 
         - name: Capture live ruleset after invalid update
           ansible.builtin.command:
-            argv: [nft, list, ruleset]
+            argv: [nft, --stateless, list, ruleset]
           register: rules_after_invalid
           changed_when: false
 
@@ -70,3 +145,59 @@
         that:
           - invalid_blacklist_rejected | default(false)
           - config_after_invalid.stat.checksum == (baseline_checksum.content | b64decode | trim)
+
+    - name: Exercise firewall rollback helper against deliberate drift
+      ansible.builtin.shell: |
+        set -euo pipefail
+        umask 077
+        TESTDIR=/opt/rw-test/firewall/rollback-helper
+        rm -rf "$TESTDIR"
+        mkdir -m 0700 "$TESTDIR"
+        printf 'flush ruleset\n' > "$TESTDIR/live.nft"
+        while read -r keyword family table_name; do
+          [ "$keyword" = table ] || continue
+          nft list table "$family" "$table_name" \
+            > "$TESTDIR/table.nft" \
+            2> "$TESTDIR/table.err"
+          if ! grep -q 'managed by iptables-nft' "$TESTDIR/table.err"; then
+            cat "$TESTDIR/table.nft" >> "$TESTDIR/live.nft"
+          fi
+        done < <(nft list tables)
+        nft -c -f "$TESTDIR/live.nft"
+        iptables-save > "$TESTDIR/iptables"
+        ip6tables-save > "$TESTDIR/ip6tables"
+        install -m 0600 /etc/nftables.conf "$TESTDIR/previous.conf"
+        (systemctl is-enabled nftables.service 2>/dev/null || true) > "$TESTDIR/enabled"
+
+        nft add table inet rollback_probe
+        printf '\n# deliberate rollback test drift\n' >> /etc/nftables.conf
+        /usr/local/sbin/rw-node-firewall-rollback \
+          "$TESTDIR/live.nft" \
+          "$TESTDIR/iptables" \
+          "$TESTDIR/ip6tables" \
+          "$TESTDIR/previous.conf" \
+          "$TESTDIR/missing" \
+          "$TESTDIR/enabled" \
+          "$TESTDIR/fired" \
+          2
+
+        grep -q '^completed=' "$TESTDIR/fired"
+        ! nft list table inet rollback_probe >/dev/null 2>&1
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Read firewall configuration after rollback helper test
+      ansible.builtin.stat:
+        path: /etc/nftables.conf
+        checksum_algorithm: sha256
+      register: config_after_rollback_helper
+
+    - name: Require rollback helper to restore persisted configuration
+      ansible.builtin.assert:
+        that: config_after_rollback_helper.stat.checksum == (baseline_checksum.content | b64decode | trim)
+
+    - name: Remove rollback helper test artifacts
+      ansible.builtin.file:
+        path: /opt/rw-test/firewall/rollback-helper
+        state: absent

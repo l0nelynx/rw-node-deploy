@@ -27,6 +27,9 @@ WARP is intentionally limited to Debian-family hosts because the external
 - `templates_repo_version: main`
 - `fake_site_force_regenerate: false`
 - `firewall_whitelist_path: "{{ playbook_dir }}/whitelist.nft"`
+- `firewall_icmp_echo_rate: 10`, `firewall_icmp_echo_burst: 20`
+- `firewall_bad_tcp_log_rate: 5`, `firewall_bad_tcp_log_burst: 10`
+- `firewall_lock_timeout: 30`, `firewall_rollback_timeout: 120`
 - `cf_api_base_url: https://api.cloudflare.com/client/v4`
 - `public_ip_lookup_url: https://api.ipify.org`
 
@@ -39,3 +42,15 @@ recreate while synchronizing the already matching panel node. It is not a
 "create another node" switch. The `dns`, `config`, and `nginx` tags include the
 derived-address/subdomain work they need; run `repo` once before the first nginx
 start so the Compose project and fake site exist.
+
+The firewall drops malformed TCP flag combinations before ASN whitelist handling,
+rate-limits only ICMP echo requests per source, and permits essential ICMP/ICMPv6
+control traffic. Bad TCP logging is capped per minute; set
+`firewall_bad_tcp_log_rate: 0` to keep counter/drop behaviour without journal logs.
+Echo rate is measured per source and per second; both firewall timeouts are in
+seconds.
+
+Each firewall apply uses an isolated staging directory and a host lock. A transient
+systemd timer restores the previous live and persisted rules if a fresh SSH
+connection cannot be established after the Docker restart. A successful check
+disarms the timer and removes all rollback artifacts.

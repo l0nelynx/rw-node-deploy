@@ -178,7 +178,10 @@ The public deployment knobs are `panel_control_port`, `panel_control_ip`,
 `nginx_image`, `remnanode_image`, `docker_pull_policy`,
 `templates_repo_version`, `fake_site_force_regenerate`,
 `firewall_public_tcp_ports`, `firewall_public_udp_ports`,
-`firewall_blacklist_urls`, `firewall_whitelist_path`, `cf_api_base_url`, and
+`firewall_blacklist_urls`, `firewall_whitelist_path`,
+`firewall_icmp_echo_rate`, `firewall_icmp_echo_burst`,
+`firewall_bad_tcp_log_rate`, `firewall_bad_tcp_log_burst`,
+`firewall_lock_timeout`, `firewall_rollback_timeout`, `cf_api_base_url`, and
 `public_ip_lookup_url`. `force_reinstall`
 rotates the managed Remnanode secret, recreates its container, and PATCHes the
 existing panel record; it never creates a duplicate record.
@@ -188,6 +191,15 @@ candidate first, then deliberately executes `flush ruleset`, recreates the manag
 `inet filter` table, and restarts Docker so its nftables/NAT chains are rebuilt. A
 controller-local `whitelist.nft` can define `whitelist_v4` and optionally
 `whitelist_v6` sets in `table inet filter`; it is compiled into that managed table.
+The whitelist bypasses ASN drops only: malformed TCP packets are rejected before
+whitelist evaluation. Essential ICMP/ICMPv6 control traffic remains available,
+while echo requests are rate-limited per source.
+
+Firewall candidates are built in isolated staging directories and serialized with
+`flock`. Before activation, the role arms a transient systemd rollback timer. It
+restores the previous live rules, persisted configuration, nftables enablement, and
+Docker networking unless a newly opened SSH connection succeeds within
+`firewall_rollback_timeout` (120 seconds by default).
 
 ## Tests
 
