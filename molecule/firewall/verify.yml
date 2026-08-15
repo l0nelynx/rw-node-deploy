@@ -82,6 +82,28 @@
         argv: [docker, info]
       changed_when: false
 
+    - name: Inspect Remnanode lifecycle fixture after Docker restart
+      ansible.builtin.command:
+        argv: [docker, container, inspect, --format, "{% raw %}{{.State.Running}}{% endraw %}", remnanode]
+      register: firewall_remnanode_fixture
+      changed_when: false
+
+    - name: Inspect shared socket cleanup results
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - /dev/shm/tcp_01.socket
+        - /dev/shm/keep.socket
+      register: firewall_socket_fixtures
+
+    - name: Require selective Remnanode socket cleanup
+      ansible.builtin.assert:
+        that:
+          - firewall_remnanode_fixture.stdout | trim == 'true'
+          - not firewall_socket_fixtures.results[0].stat.exists
+          - firewall_socket_fixtures.results[1].stat.exists
+          - firewall_socket_fixtures.results[1].stat.issock
+
     - name: Verify Docker bridge and published-port NAT after restart
       ansible.builtin.uri:
         url: http://127.0.0.1:18090/

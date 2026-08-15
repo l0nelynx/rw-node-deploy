@@ -44,6 +44,42 @@
       when: firewall_fixture_container.rc != 0
       changed_when: true
 
+    - name: Start restartable Remnanode lifecycle fixture
+      ansible.builtin.command:
+        argv:
+          - docker
+          - run
+          - --detach
+          - --name
+          - remnanode
+          - --restart
+          - always
+          - nginx:alpine
+          - sh
+          - -c
+          - sleep 3600
+      changed_when: true
+
+    - name: Create Remnanode and unrelated Unix socket fixtures
+      ansible.builtin.shell: |
+        set -euo pipefail
+        python3 - <<'PY'
+        import os
+        import socket
+
+        for path in ('/dev/shm/tcp_01.socket', '/dev/shm/keep.socket'):
+            try:
+                os.unlink(path)
+            except FileNotFoundError:
+                pass
+            sock = socket.socket(socket.AF_UNIX)
+            sock.bind(path)
+            sock.close()
+        PY
+      args:
+        executable: /bin/bash
+      changed_when: true
+
     - name: Apply managed firewall
       ansible.builtin.include_role:
         name: deploy-rw-by-lynx

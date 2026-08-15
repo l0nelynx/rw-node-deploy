@@ -54,3 +54,7 @@ Each firewall apply uses an isolated staging directory and a host lock. A transi
 systemd timer restores the previous live and persisted rules if a fresh SSH
 connection cannot be established after the Docker restart. A successful check
 disarms the timer and removes all rollback artifacts.
+
+Before that Docker restart, the role stops a running Remnanode and removes only
+its `/dev/shm/tcp_*.socket` files. Other shared sockets are preserved, and a
+previously running Remnanode is explicitly restored if Docker does not restart it.

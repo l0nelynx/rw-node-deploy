@@ -259,10 +259,85 @@
         state: started
         enabled: true
 
+    - name: Inspect Remnanode state before Docker restart
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - inspect
+          - --format
+          - "{% raw %}{{.State.Running}}{% endraw %}"
+          - remnanode
+      register: firewall_remnanode_before_restart
+      changed_when: false
+      failed_when: false
+
+    - name: Stop running Remnanode before clearing its shared sockets
+      ansible.builtin.command:
+        argv: [docker, container, stop, --time, '30', remnanode]
+      when:
+        - firewall_remnanode_before_restart.rc == 0
+        - firewall_remnanode_before_restart.stdout | trim == 'true'
+      changed_when: true
+
+    - name: Remove stale Remnanode TCP sockets before Docker restart
+      ansible.builtin.shell: |
+        set -euo pipefail
+        find /dev/shm -maxdepth 1 -type s -name 'tcp_*.socket' -print -delete
+      args:
+        executable: /bin/bash
+      register: firewall_remnanode_socket_cleanup
+      changed_when: firewall_remnanode_socket_cleanup.stdout_lines | length > 0
+
     - name: Rebuild Docker nftables rules after a full firewall replacement
       ansible.builtin.systemd:
         name: docker.service
         state: restarted
+
+    - name: Inspect Remnanode state after Docker restart
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - inspect
+          - --format
+          - "{% raw %}{{.State.Running}}{% endraw %}"
+          - remnanode
+      register: firewall_remnanode_after_restart
+      changed_when: false
+      failed_when: false
+      when:
+        - firewall_remnanode_before_restart.rc == 0
+        - firewall_remnanode_before_restart.stdout | trim == 'true'
+
+    - name: Start Remnanode when Docker did not restore it automatically
+      ansible.builtin.command:
+        argv: [docker, container, start, remnanode]
+      when:
+        - firewall_remnanode_before_restart.rc == 0
+        - firewall_remnanode_before_restart.stdout | trim == 'true'
+        - firewall_remnanode_after_restart.rc != 0 or firewall_remnanode_after_restart.stdout | trim != 'true'
+      changed_when: true
+
+    - name: Confirm previously running Remnanode is running again
+      ansible.builtin.command:
+        argv:
+          - docker
+          - container
+          - inspect
+          - --format
+          - "{% raw %}{{.State.Running}}{% endraw %}"
+          - remnanode
+      register: firewall_remnanode_restored
+      changed_when: false
+      retries: 10
+      delay: 1
+      until:
+        - firewall_remnanode_restored.rc == 0
+        - firewall_remnanode_restored.stdout | trim == 'true'
+      when:
+        - firewall_remnanode_before_restart.rc == 0
+        - firewall_remnanode_before_restart.stdout | trim == 'true'
 
     - name: Close the existing persistent SSH connection
       ansible.builtin.meta: reset_connection

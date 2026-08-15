@@ -200,6 +200,9 @@ Firewall candidates are built in isolated staging directories and serialized wit
 restores the previous live rules, persisted configuration, nftables enablement, and
 Docker networking unless a newly opened SSH connection succeeds within
 `firewall_rollback_timeout` (120 seconds by default).
+Before the required Docker restart, a running Remnanode is stopped and only its
+`/dev/shm/tcp_*.socket` endpoints are removed; unrelated shared-memory sockets
+are preserved and the previously running container is brought back up.
 
 ## Tests
 
