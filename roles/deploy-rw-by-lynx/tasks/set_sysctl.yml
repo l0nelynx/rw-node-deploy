@@ -1,5 +1,27 @@
 ---
-- name: Check whether BBR is available
+- name: Check whether the BBR kernel module is loaded
+  ansible.builtin.stat:
+    path: /sys/module/tcp_bbr
+  register: bbr_module
+
+- name: Load the BBR kernel module
+  ansible.builtin.command:
+    argv: [modprobe, tcp_bbr]
+  register: bbr_module_load
+  when: not bbr_module.stat.exists
+  changed_when: bbr_module_load.rc == 0
+  failed_when: false
+
+- name: Require the BBR kernel module
+  ansible.builtin.assert:
+    that:
+      - bbr_module.stat.exists or (bbr_module_load.rc | default(1)) == 0
+    fail_msg: >-
+      Unable to load the tcp_bbr kernel module. The running kernel does not
+      provide BBR or its matching kernel modules are not installed:
+      {{ bbr_module_load.stderr | default('tcp_bbr is unavailable') | trim }}
+
+- name: Check whether BBR is registered
   ansible.builtin.command:
     argv: [sysctl, -n, net.ipv4.tcp_available_congestion_control]
   register: available_congestion_controls
@@ -8,7 +30,20 @@
 - name: Require BBR support
   ansible.builtin.assert:
     that: "'bbr' in available_congestion_controls.stdout.split()"
-    fail_msg: BBR is not available in the current kernel.
+    fail_msg: The tcp_bbr module loaded, but BBR was not registered as an available TCP congestion control algorithm.
+
+- name: Ensure modules-load drop-in directory exists
+  ansible.builtin.file:
+    path: /etc/modules-load.d
+    state: directory
+    mode: '0755'
+
+- name: Load BBR automatically after boot
+  ansible.builtin.copy:
+    dest: /etc/modules-load.d/90-rw-node.conf
+    mode: '0644'
+    content: |
+      tcp_bbr
 
 - name: Ensure sysctl drop-in directory exists
   ansible.builtin.file:

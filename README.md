@@ -45,7 +45,7 @@ parts with `--skip-tags`) instead of the whole playbook.
 | `repo` | `sync_repo.yml` | Install git/unzip, create the `/opt/nginx` tree, write the nginx `docker-compose.yml`, clone templates, and generate the unique decoy site. |
 | `config` | `derive_config.yml`, `build_nginx_conf.yml` | Build nginx **configuration only**: public IP, subdomain list, `default.conf`, `nginx.conf` (no container restart). |
 | `nginx` | `collect_pp_flags.yml`, `build_nginx_conf.yml`, `run_nginx.yml` | Everything under `config` **plus** (re)start the nginx container. |
-| `sysctl` | `set_sysctl.yml` | Kernel tuning: BBR, buffer sizes, `tcp_fastopen`, optional IPv6 disable. |
+| `sysctl` | `set_sysctl.yml` | Loads and persists `tcp_bbr`, then applies BBR, buffer sizes, `tcp_fastopen`, and optional IPv6 disable. |
 | `dns` | `setup_cloudflare.yml` | Create Cloudflare A-records for the reality domain and all subdomains. |
 | `certs` | `make_certs.yml` | Generate the self-signed wildcard TLS certificate. |
 | `security`, `firewall` | `block_asn.yml` | nftables firewall: ASN blacklists, optional whitelist, IP-restricted panel port, Docker/monitoring rules, and persistence across reboots. Both tags select the same tasks. |

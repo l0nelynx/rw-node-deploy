@@ -9,6 +9,24 @@
       loop: [compose, buildx]
       changed_when: false
 
+    - name: Check registered congestion control algorithms
+      ansible.builtin.command:
+        argv: [sysctl, -n, net.ipv4.tcp_available_congestion_control]
+      register: available_congestion_controls
+      changed_when: false
+
+    - name: Check persistent BBR module configuration
+      ansible.builtin.slurp:
+        src: /etc/modules-load.d/90-rw-node.conf
+      register: bbr_modules_load
+      changed_when: false
+
+    - name: Require loaded and persistent BBR support
+      ansible.builtin.assert:
+        that:
+          - "'bbr' in available_congestion_controls.stdout.split()"
+          - (bbr_modules_load.content | b64decode | trim) == 'tcp_bbr'
+
     - name: Inspect managed files
       ansible.builtin.stat:
         path: "{{ item.path }}"
