@@ -39,6 +39,11 @@
         that: ansible_facts.os_family == 'Debian'
         fail_msg: install_warp=true is supported only on Debian/Ubuntu hosts.
       when: install_warp | default(false) | bool
+    - name: Prepare WARP Python dependencies
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_prerequisites
+      when: install_warp | default(false) | bool
   roles:
     - role: warp_native
       when: install_warp | default(false) | bool

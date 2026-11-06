@@ -157,6 +157,13 @@ warp_watchdog=5
 WARP installation is supported only on Debian/Ubuntu. Setting `install_warp=true`
 on an EL host fails before any WARP changes are made.
 
+Before running `warp_native`, the WARP play installs `python3-pexpect`, which is
+required by `ansible.builtin.expect` for wgcf registration, and checks that the
+target Ansible interpreter can import it. If `ansible_python_interpreter` selects
+a custom Python or virtual environment, install `pexpect` there or select the
+distribution Python that provides the system package. A missing import stops the
+play before registration with an interpreter-specific diagnostic.
+
 ## Security and lifecycle
 
 The bootstrap and deployment plays use the existing service key

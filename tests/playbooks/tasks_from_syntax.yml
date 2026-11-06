@@ -38,6 +38,11 @@
         name: deploy-rw-by-lynx
         tasks_from: warp_endpoint.yml
 
+    - name: Parse WARP prerequisite task entrypoint
+      ansible.builtin.import_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_prerequisites.yml
+
     - name: Parse WARP key-pool task entrypoint
       ansible.builtin.import_role:
         name: deploy-rw-by-lynx

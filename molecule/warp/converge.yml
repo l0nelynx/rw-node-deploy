@@ -3,6 +3,26 @@
   hosts: all
   become: true
   tasks:
+    - name: Prepare WARP Python dependencies
+      ansible.builtin.include_role:
+        name: deploy-rw-by-lynx
+        tasks_from: warp_prerequisites
+
+    - name: Exercise interactive wgcf confirmation without a real account
+      ansible.builtin.expect:
+        command: >-
+          {{ ansible_facts.python.executable }} -c
+          'answer = input("Do you agree? "); print("accepted" if answer == "Yes" else "rejected")'
+        responses:
+          'Do you agree\?': 'Yes'
+        timeout: 10
+      register: warp_registration_probe
+      changed_when: false
+
+    - name: Require successful interactive registration confirmation
+      ansible.builtin.assert:
+        that: "'accepted' in warp_registration_probe.stdout"
+
     - name: Validate Debian-family WARP preflight
       ansible.builtin.include_role:
         name: deploy-rw-by-lynx
