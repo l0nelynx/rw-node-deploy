@@ -1,0 +1,28 @@
+---
+- name: Install pexpect for wgcf registration
+  ansible.builtin.apt:
+    name: python3-pexpect
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Check pexpect in the target Ansible interpreter
+  ansible.builtin.command:
+    argv:
+      - "{{ ansible_facts.python.executable }}"
+      - -c
+      - import pexpect
+  register: warp_pexpect_check
+  changed_when: false
+  failed_when: false
+  when: not ansible_check_mode
+
+- name: Require pexpect before running warp_native
+  ansible.builtin.assert:
+    that: warp_pexpect_check.rc | default(1) == 0
+    fail_msg: >-
+      python3-pexpect is installed, but {{ ansible_facts.python.executable }}
+      cannot import pexpect. Set ansible_python_interpreter to the distribution
+      Python that provides python3-pexpect, or install pexpect in the selected
+      interpreter's environment before retrying WARP installation.
+  when: not ansible_check_mode

@@ -11,7 +11,9 @@ converge, idempotence where applicable, side effect, verify, cleanup, and destro
   whitelist precedence, and protects the last-known-good configuration.
 - `tags` invokes the actual role entrypoint with public tags and checks restart and
   fake-site regeneration contracts.
-- `warp` uses deterministic command stubs; no real WARP account or license is used.
+- `warp` installs the registration Python dependency and exercises an interactive
+  confirmation with `expect`, then uses deterministic command stubs; no real WARP
+  account or license is used.
 - `ssh` opens two disposable sshd targets and tests password/master-key bootstrap,
   service-key login, idempotence, host-key behavior, and serial failure handling.
 
